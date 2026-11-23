@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PerpGuard</title>
+    <style>
+      body { margin: 0; background: #000; color: #3f3; font: 14px/1.4 ui-monospace, Consolas, monospace; }
+      #mirror { width: 576px; height: 288px; box-sizing: border-box; padding: 12px; margin: 16px;
+                border: 1px solid #1a4; white-space: pre-wrap; }
+      #hint { margin: 0 16px; color: #7a7; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <!-- Phone-side mirror of the glasses card (debug only; the real UI is drawn on G2 via the SDK). -->
+    <pre id="mirror">Starting...</pre>
+    <p id="hint">Phone/browser view. The glasses show the same card.</p>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

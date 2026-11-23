@@ -1,0 +1,33 @@
+# --- Internal planning docs: never commit (strategy, competitor analysis, reviews) ---
+/START_HERE.md
+/HACKATHON.md
+/IDEAS.md
+/REVIEW_A.md
+/REVIEW_B.md
+/internal/
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Local data ---
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Build output and dependencies ---
+node_modules/
+dist/
+build/
+*.ehpk
+.vite/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

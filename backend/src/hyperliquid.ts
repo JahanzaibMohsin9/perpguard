@@ -1,0 +1,85 @@
+// Read-only Hyperliquid access via the public /info endpoint (no keys needed).
+// Order placement (agent wallet + signing) comes later, in a separate module.
+
+import type { PositionView, Side, Snapshot } from '../../shared/protocol.ts';
+
+export type Network = 'testnet' | 'mainnet';
+
+const API_URL: Record<Network, string> = {
+  testnet: 'https://api.hyperliquid-testnet.xyz',
+  mainnet: 'https://api.hyperliquid.xyz',
+};
+
+async function info<T>(network: Network, body: unknown): Promise<T> {
+  const res = await fetch(`${API_URL[network]}/info`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`Hyperliquid /info ${res.status}`);
+  return (await res.json()) as T;
+}
+
+// Subset of the clearinghouseState response we use.
+interface ClearinghouseState {
+  marginSummary: { accountValue: string };
+  assetPositions: Array<{
+    position: {
+      coin: string;
+      szi: string; // signed size: + long, - short
+      entryPx: string;
+      liquidationPx: string | null;
+      unrealizedPnl: string;
+      leverage: { type: string; value: number };
+    };
+  }>;
+}
+
+export function isAddress(s: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(s);
+}
+
+export async function fetchSnapshot(network: Network, address: string): Promise<Snapshot> {
+  const [state, mids] = await Promise.all([
+    info<ClearinghouseState>(network, { type: 'clearinghouseState', user: address }),
+    info<Record<string, string>>(network, { type: 'allMids' }),
+  ]);
+
+  const positions: PositionView[] = state.assetPositions
+    .map(({ position: p }) => {
+      const szi = Number(p.szi);
+      const side: Side = szi >= 0 ? 'LONG' : 'SHORT';
+      const markPx = mids[p.coin] !== undefined ? Number(mids[p.coin]) : null;
+      const liqPx = p.liquidationPx !== null ? Number(p.liquidationPx) : null;
+      let liqDistancePct: number | null = null;
+      if (markPx && liqPx && liqPx > 0) {
+        // How far price must move AGAINST the position to reach liquidation.
+        const move = side === 'LONG' ? markPx - liqPx : liqPx - markPx;
+        liqDistancePct = Math.max(0, (move / markPx) * 100);
+      }
+      return {
+        coin: p.coin,
+        side,
+        size: Math.abs(szi),
+        leverage: p.leverage.value,
+        entryPx: Number(p.entryPx),
+        markPx,
+        liqPx,
+        liqDistancePct,
+        unrealizedPnl: Number(p.unrealizedPnl),
+      };
+    })
+    .filter((p) => p.size > 0)
+    // Riskiest first: smallest distance to liquidation on top.
+    .sort((a, b) => (a.liqDistancePct ?? Infinity) - (b.liqDistancePct ?? Infinity));
+
+  return {
+    type: 'snapshot',
+    network,
+    address,
+    accountValue: Number(state.marginSummary.accountValue),
+    positions,
+    ts: Date.now(),
+  };
+}
