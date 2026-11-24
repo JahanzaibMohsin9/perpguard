@@ -1,5 +1,7 @@
 # PerpGuard
 
+[![CI](https://github.com/JahanzaibMohsin9/perpguard/actions/workflows/ci.yml/badge.svg)](https://github.com/JahanzaibMohsin9/perpguard/actions/workflows/ci.yml)
+
 **See how close your Hyperliquid position is to liquidation at a glance on Even Realities G2 glasses, then protect it in seconds with a tap, your voice, or Telegram.**
 
 Built for *Heads Up: Even Realities Hackathon* (TVM Ventures & Daos Hub), Nov 23–29, 2026.
@@ -117,6 +119,19 @@ The agent key can trade but can never withdraw. Even so, never commit `.env`.
 - `voice-test.ts`: transcribe WAV files and show which command each maps to.
 - `demo-position.ts`: set up an isolated-margin demo position, so the card shows real WARNING or DANGER. This is a dev tool; the product itself never opens positions.
 - `fund-testnet.ts`, `bridge-gas.ts`: an experimental free testnet-funding route (Circle CCTP). It is **unreliable**: Hyperliquid's testnet forwarder drops most deposits. Use the official faucet instead.
+
+## Tests
+
+```bash
+npm test    # 16 unit tests, also run by GitHub Actions on every push
+```
+
+They cover:
+- **Order signing:** the action hash matches the **official Hyperliquid Python SDK golden vector**, and signatures recover to the agent address. Number formatting is checked too.
+- **Risk:** liquidation distance for longs and shorts, alert levels, and hysteresis.
+- **Voice grammar:** known phrases map to actions. Unknown speech, "buy" commands and Whisper's silence hallucinations map to nothing.
+- **Telegram Mini App login:** valid launch data passes. Tampered, foreign-bot and stale data is rejected.
+- **Glasses cards:** only glyphs the G2 display can render, and every card fits the lens.
 
 ## Notes and limitations
 

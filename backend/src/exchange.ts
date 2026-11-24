@@ -16,19 +16,25 @@ const STOP_PCT = 0.02; // "2% stop": stop 2% beyond the current mark, against th
 
 // ---------- signing ----------
 
-function actionHash(action: unknown, nonce: number): Hex {
+/** keccak(msgpack(action) | nonce u64 BE | 0x00 = no vault). Exported for tests. */
+export function actionHash(action: unknown, nonce: number): Hex {
   const nonceBytes = new Uint8Array(8);
   new DataView(nonceBytes.buffer).setBigUint64(0, BigInt(nonce));
   return keccak256(concat([encode(action), nonceBytes, new Uint8Array([0])]));
 }
 
-async function signL1(agent: PrivateKeyAccount, network: Network, action: unknown, nonce: number) {
-  const sig = await agent.signTypedData({
+/** EIP-712 "phantom agent" payload that Hyperliquid expects for L1 actions. Exported for tests. */
+export function l1TypedData(network: Network, action: unknown, nonce: number) {
+  return {
     domain: { name: 'Exchange', version: '1', chainId: 1337, verifyingContract: '0x0000000000000000000000000000000000000000' },
     types: { Agent: [{ name: 'source', type: 'string' }, { name: 'connectionId', type: 'bytes32' }] },
     primaryType: 'Agent',
     message: { source: network === 'mainnet' ? 'a' : 'b', connectionId: actionHash(action, nonce) },
-  });
+  } as const;
+}
+
+async function signL1(agent: PrivateKeyAccount, network: Network, action: unknown, nonce: number) {
+  const sig = await agent.signTypedData(l1TypedData(network, action, nonce));
   const { r, s, v, yParity } = parseSignature(sig);
   return { r, s, v: v !== undefined ? Number(v) : yParity + 27 };
 }

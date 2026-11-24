@@ -10,7 +10,8 @@
     "dev:backend": "npm run dev -w backend",
     "dev:glasses": "npm run dev -w glasses",
     "sim": "evenhub-simulator http://localhost:5173",
-    "typecheck": "npm run typecheck -w backend && npm run typecheck -w glasses"
+    "typecheck": "npm run typecheck -w backend && npm run typecheck -w glasses",
+    "test": "npm test -w backend"
   },
   "engines": {
     "node": ">=22.12.0"

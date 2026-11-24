@@ -365,26 +365,13 @@ export class TelegramBot {
    * linked in a private chat, or a member of a linked group.
    */
   async verifyMiniAppUser(initData: string): Promise<{ id: number; name: string } | null> {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash') ?? '';
-    params.delete('hash');
-    const dataCheck = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
-    const secret = createHmac('sha256', 'WebAppData').update(this.token).digest();
-    const expected = createHmac('sha256', secret).update(dataCheck).digest('hex');
-    if (hash.length !== expected.length || !timingSafeEqual(Buffer.from(hash), Buffer.from(expected))) return null;
-    if (Date.now() / 1000 - Number(params.get('auth_date') ?? 0) > 24 * 3600) return null; // stale launch data
-    let user: { id: number; first_name?: string };
-    try {
-      user = JSON.parse(params.get('user') ?? '');
-    } catch {
-      return null;
-    }
-    if (!user?.id) return null;
-    const name = user.first_name ?? String(user.id);
-    if (this.isLinked(user.id)) return { id: user.id, name };
+    const checked = checkInitData(initData, this.token, Date.now() / 1000);
+    if (!checked) return null;
+    const { id, name } = checked;
+    if (this.isLinked(id)) return { id, name };
     for (const c of this.state.chats.filter((x) => x.id < 0)) {
-      const m = await this.api<{ status: string }>('getChatMember', { chat_id: c.id, user_id: user.id }).catch(() => null);
-      if (m && ['creator', 'administrator', 'member'].includes(m.status)) return { id: user.id, name };
+      const m = await this.api<{ status: string }>('getChatMember', { chat_id: c.id, user_id: id }).catch(() => null);
+      if (m && ['creator', 'administrator', 'member'].includes(m.status)) return { id, name };
     }
     return null;
   }
@@ -392,11 +379,7 @@ export class TelegramBot {
   // ---------- outgoing: alerts and receipts ----------
 
   risk(p: PositionView): Risk {
-    const d = p.liqDistancePct;
-    if (d === null) return 'OK';
-    if (d < this.state.dangerPct) return 'DANGER';
-    if (d < this.state.warnPct) return 'WARNING';
-    return 'OK';
+    return riskLevel(p.liqDistancePct, this.state.warnPct, this.state.dangerPct);
   }
 
   /** Call on every fresh snapshot: alerts when a position's risk level changes. */
@@ -405,13 +388,7 @@ export class TelegramBot {
     for (const p of snap.positions) {
       seen.add(p.coin);
       const before = this.lastRisk.get(p.coin);
-      let now = this.risk(p);
-      // Hysteresis: only step DOWN a level once clearly past the threshold, so a price hovering at
-      // the boundary cannot spam alternating alerts.
-      if (before && RISK_ORDER[now] < RISK_ORDER[before] && p.liqDistancePct !== null) {
-        const threshold = before === 'DANGER' ? this.state.dangerPct : this.state.warnPct;
-        if (p.liqDistancePct < threshold + HYSTERESIS_PCT) now = before;
-      }
+      const now = nextRisk(before, p.liqDistancePct, this.state.warnPct, this.state.dangerPct);
       this.lastRisk.set(p.coin, now);
       if (before === undefined) {
         // First sight of a risky position. Right after a server restart we only record the level,
@@ -453,6 +430,50 @@ export class TelegramBot {
       true, // receipts go out even when alerts are paused
     );
   }
+}
+
+/** Risk level for a liquidation distance (null distance = no liquidation price = OK). */
+export function riskLevel(distancePct: number | null, warnPct: number, dangerPct: number): Risk {
+  if (distancePct === null) return 'OK';
+  if (distancePct < dangerPct) return 'DANGER';
+  if (distancePct < warnPct) return 'WARNING';
+  return 'OK';
+}
+
+/**
+ * Risk level with hysteresis: escalate immediately, but only step DOWN a level once the distance is
+ * HYSTERESIS_PCT past the threshold, so a price hovering at a boundary cannot spam alternating alerts.
+ */
+export function nextRisk(before: Risk | undefined, distancePct: number | null, warnPct: number, dangerPct: number): Risk {
+  const now = riskLevel(distancePct, warnPct, dangerPct);
+  if (before && RISK_ORDER[now] < RISK_ORDER[before] && distancePct !== null) {
+    const threshold = before === 'DANGER' ? dangerPct : warnPct;
+    if (distancePct < threshold + HYSTERESIS_PCT) return before;
+  }
+  return now;
+}
+
+/**
+ * Verifies Telegram Mini App initData per Telegram's spec (HMAC-SHA256 with key HMAC("WebAppData", token))
+ * and rejects launch data older than 24 h. Returns the Telegram user, or null.
+ */
+export function checkInitData(initData: string, botToken: string, nowSec: number): { id: number; name: string } | null {
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash') ?? '';
+  params.delete('hash');
+  const dataCheck = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+  const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
+  const expected = createHmac('sha256', secret).update(dataCheck).digest('hex');
+  if (hash.length !== expected.length || !timingSafeEqual(Buffer.from(hash), Buffer.from(expected))) return null;
+  if (nowSec - Number(params.get('auth_date') ?? 0) > 24 * 3600) return null; // stale launch data
+  let user: { id?: number; first_name?: string };
+  try {
+    user = JSON.parse(params.get('user') ?? '');
+  } catch {
+    return null;
+  }
+  if (!user?.id) return null;
+  return { id: user.id, name: user.first_name ?? String(user.id) };
 }
 
 function positionHtml(p: PositionView, risk: Risk, network: string): string {

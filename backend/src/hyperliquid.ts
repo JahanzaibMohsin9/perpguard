@@ -40,6 +40,13 @@ interface SpotState {
   balances: Array<{ coin: string; total: string; hold: string }>;
 }
 
+/** % the mark must move AGAINST the position to reach the liquidation price (null if unknown). */
+export function liquidationDistancePct(side: Side, markPx: number | null, liqPx: number | null): number | null {
+  if (!markPx || !liqPx || liqPx <= 0) return null;
+  const move = side === 'LONG' ? markPx - liqPx : liqPx - markPx;
+  return Math.max(0, (move / markPx) * 100);
+}
+
 export function isAddress(s: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(s);
 }
@@ -60,12 +67,7 @@ export async function fetchSnapshot(network: Network, address: string): Promise<
       const side: Side = szi >= 0 ? 'LONG' : 'SHORT';
       const markPx = mids[p.coin] !== undefined ? Number(mids[p.coin]) : null;
       const liqPx = p.liquidationPx !== null ? Number(p.liquidationPx) : null;
-      let liqDistancePct: number | null = null;
-      if (markPx && liqPx && liqPx > 0) {
-        // How far price must move AGAINST the position to reach liquidation.
-        const move = side === 'LONG' ? markPx - liqPx : liqPx - markPx;
-        liqDistancePct = Math.max(0, (move / markPx) * 100);
-      }
+      const liqDistancePct = liquidationDistancePct(side, markPx, liqPx);
       return {
         coin: p.coin,
         side,
