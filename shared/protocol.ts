@@ -55,11 +55,20 @@ export interface VoiceResultMessage {
   command: { action: ActionKind; coin: string } | null; // null = no known phrase heard
 }
 
-export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage;
+/** Sent on connect and after auth: what this connection may do. */
+export interface SessionMessage {
+  type: 'session';
+  authed: boolean; // may trade (local glasses, or a verified linked Telegram user)
+  user: string | null; // display name of the verified Telegram user
+  master: string | null; // the account PerpGuard can protect (only shown to authed sessions)
+}
+
+export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
   | { type: 'refresh' }
+  | { type: 'auth'; initData: string } // Telegram Mini App launch data (signed by Telegram)
   | { type: 'action'; requestId: string; action: ActionKind; coin: string; heard?: string } // heard = voice transcript
   // Push-to-talk audio: base64 of 16 kHz mono s16le PCM. screenCoin = position shown on the glasses.
   | { type: 'voice'; requestId: string; pcm: string; screenCoin: string | null; coins: string[] };

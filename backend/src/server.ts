@@ -5,7 +5,10 @@ import type { WebSocket } from 'ws';
 import { ACTION_LABELS, type ActionKind, type ClientMessage, type ServerMessage } from '../../shared/protocol.ts';
 import { agentKeyFromEnv, Trader } from './exchange.ts';
 import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
+import { readFile } from 'node:fs/promises';
+import type { FastifyRequest } from 'fastify';
 import { TelegramBot } from './telegram.ts';
+import { startQuickTunnel } from './tunnel.ts';
 import { loadWhisper, parseCommand, transcribe } from './voice.ts';
 import type { Snapshot } from '../../shared/protocol.ts';
 
@@ -115,22 +118,50 @@ const ACTIONS = new Set<ActionKind>(Object.keys(ACTION_LABELS) as ActionKind[]);
 await app.register(cors, { origin: true });
 await app.register(websocket);
 
-app.get('/health', async () => ({ ok: true, network: NETWORK, trading: Boolean(trader), ts: Date.now() }));
+app.get('/health', async () => ({ ok: true, network: NETWORK, ts: Date.now() }));
+
+// Telegram Mini App (single static page, no build step).
+const MINI_APP = new URL('../public/app.html', import.meta.url);
+app.get('/app', async (_req, reply) => {
+  reply.header('Cache-Control', 'no-store').type('text/html; charset=utf-8');
+  return readFile(MINI_APP, 'utf8');
+});
+
+/**
+ * Direct connection from this PC (the glasses simulator / Even App on the same machine).
+ * Requests through the Cloudflare tunnel also arrive from 127.0.0.1, but carry forwarding headers.
+ */
+function isLocalRequest(req: FastifyRequest): boolean {
+  const ip = req.socket.remoteAddress ?? '';
+  const loopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  const h = req.headers;
+  return loopback && !h['cf-connecting-ip'] && !h['x-forwarded-for'] && !h['cf-ray'];
+}
 
 function send(socket: WebSocket, msg: ServerMessage) {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
 }
 
 app.get('/ws', { websocket: true }, (socket, req) => {
-  let address = isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : '';
+  // Local glasses may trade; remote clients (Mini App via tunnel) must prove a linked Telegram user.
+  const local = isLocalRequest(req);
+  let authed = local;
+  let userName: string | null = null;
+  let address = authed && isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : '';
   let timer: NodeJS.Timeout | undefined;
   let inFlight = false;
 
-  const canTrade = () => Boolean(trader && address.toLowerCase() === trader.master.toLowerCase());
+  const canTrade = () => Boolean(authed && trader && address.toLowerCase() === trader.master.toLowerCase());
+  const sendSession = () =>
+    send(socket, { type: 'session', authed, user: userName, master: authed && isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : null });
 
   const poll = async () => {
     if (!address) {
-      send(socket, { type: 'status', level: 'info', message: 'No wallet linked yet. Set HL_WATCH_ADDRESS.' });
+      send(socket, {
+        type: 'status',
+        level: 'info',
+        message: local ? 'No wallet linked yet. Set HL_WATCH_ADDRESS.' : 'Spectator mode: enter an address to watch.',
+      });
       return;
     }
     if (inFlight) return;
@@ -159,7 +190,8 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     const result = await runProtective(msg.action, msg.coin);
     reply(result.ok, result.message);
     const heard = typeof msg.heard === 'string' && msg.heard ? msg.heard.slice(0, 80) : undefined;
-    void bot?.receipt(heard ? 'glasses voice' : 'glasses tap', msg.action, msg.coin, result.ok, result.message, heard);
+    const source = !local ? `Mini App (${userName ?? 'user'})` : heard ? 'glasses voice' : 'glasses tap';
+    void bot?.receipt(source, msg.action, msg.coin, result.ok, result.message, heard);
     void poll(); // show the new position state right away
   };
 
@@ -167,7 +199,7 @@ app.get('/ws', { websocket: true }, (socket, req) => {
   const runVoice = async (msg: Extract<ClientMessage, { type: 'voice' }>) => {
     const reply = (transcript: string, command: { action: ActionKind; coin: string } | null) =>
       send(socket, { type: 'voiceResult', requestId: msg.requestId, transcript, command });
-    if (!VOICE_ENABLED || voiceBusy) return reply('', null);
+    if (!VOICE_ENABLED || voiceBusy || !authed) return reply('', null);
     voiceBusy = true;
     try {
       const pcm = Buffer.from(msg.pcm, 'base64').subarray(0, MAX_VOICE_BYTES);
@@ -198,6 +230,18 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       restart();
     } else if (msg.type === 'refresh') {
       void poll();
+    } else if (msg.type === 'auth' && typeof msg.initData === 'string' && !local) {
+      void (async () => {
+        const user = bot ? await bot.verifyMiniAppUser(msg.initData) : null;
+        if (user) {
+          authed = true;
+          userName = user.name;
+          req.log.info(`Mini App user verified: ${user.id}`);
+          if (!address && isAddress(DEFAULT_ADDRESS)) address = DEFAULT_ADDRESS;
+        }
+        sendSession();
+        restart();
+      })();
     } else if (msg.type === 'action') {
       void runAction(msg);
     } else if (msg.type === 'voice' && typeof msg.pcm === 'string') {
@@ -206,8 +250,21 @@ app.get('/ws', { websocket: true }, (socket, req) => {
   });
 
   socket.on('close', () => clearInterval(timer));
+  sendSession();
   restart();
 });
 
 await app.listen({ port: PORT, host: '0.0.0.0' });
 console.log(`[perpguard] backend on http://localhost:${PORT} (${NETWORK}, ${trader ? 'trading enabled' : 'read-only'})`);
+
+// Public URL for the Mini App (opt-in): TUNNEL=cloudflare
+if (process.env.TUNNEL === 'cloudflare') {
+  startQuickTunnel(PORT, (m) => app.log.warn(m)).then(
+    async ({ url }) => {
+      app.log.info(`Mini App public URL: ${url}/app`);
+      for (let i = 0; i < 30 && !bot; i++) await new Promise((r) => setTimeout(r, 1000)); // wait for the bot
+      await bot?.setMiniAppUrl(`${url}/app`).catch((err: Error) => app.log.error(`menu button: ${err.message}`));
+    },
+    (err: Error) => app.log.error(`Tunnel failed: ${err.message}`),
+  );
+}

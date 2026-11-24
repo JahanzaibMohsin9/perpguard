@@ -6,7 +6,7 @@
 // Linked chats are stored in backend/data/telegram.json (git-ignored).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
 import { ACTION_LABELS, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
 import { decodeToPcm16k, parseCommand, transcribe } from './voice.ts';
@@ -201,6 +201,14 @@ export class TelegramBot {
     switch (cmd) {
       case '/help':
         return this.send(chatId, HELP);
+      case '/app':
+        if (!this.miniAppUrl) return this.send(chatId, 'The Mini App is offline (server started without TUNNEL=cloudflare).');
+        if (msg.chat.type !== 'private') return this.send(chatId, 'Open the Mini App from your private chat with me (menu button).');
+        return this.api('sendMessage', {
+          chat_id: chatId,
+          text: '📱 Live dashboard:',
+          reply_markup: { inline_keyboard: [[{ text: 'Open PerpGuard', web_app: { url: this.miniAppUrl } }]] },
+        });
       case '/status':
         return this.sendStatus(chatId);
       case '/pause':
@@ -339,6 +347,46 @@ export class TelegramBot {
     }
   }
 
+  // ---------- Mini App ----------
+
+  private miniAppUrl: string | null = null;
+
+  /** Points the bot's menu button (and /app) at the current public Mini App URL. */
+  async setMiniAppUrl(url: string) {
+    this.miniAppUrl = url;
+    await this.api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'PerpGuard', web_app: { url } } });
+    this.deps.log.info('Telegram menu button now opens the Mini App.');
+  }
+
+  /**
+   * Verifies Telegram Mini App initData (HMAC-SHA256 per Telegram docs) and that the user is allowed:
+   * linked in a private chat, or a member of a linked group.
+   */
+  async verifyMiniAppUser(initData: string): Promise<{ id: number; name: string } | null> {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash') ?? '';
+    params.delete('hash');
+    const dataCheck = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = createHmac('sha256', 'WebAppData').update(this.token).digest();
+    const expected = createHmac('sha256', secret).update(dataCheck).digest('hex');
+    if (hash.length !== expected.length || !timingSafeEqual(Buffer.from(hash), Buffer.from(expected))) return null;
+    if (Date.now() / 1000 - Number(params.get('auth_date') ?? 0) > 24 * 3600) return null; // stale launch data
+    let user: { id: number; first_name?: string };
+    try {
+      user = JSON.parse(params.get('user') ?? '');
+    } catch {
+      return null;
+    }
+    if (!user?.id) return null;
+    const name = user.first_name ?? String(user.id);
+    if (this.isLinked(user.id)) return { id: user.id, name };
+    for (const c of this.state.chats.filter((x) => x.id < 0)) {
+      const m = await this.api<{ status: string }>('getChatMember', { chat_id: c.id, user_id: user.id }).catch(() => null);
+      if (m && ['creator', 'administrator', 'member'].includes(m.status)) return { id: user.id, name };
+    }
+    return null;
+  }
+
   // ---------- outgoing: alerts and receipts ----------
 
   risk(p: PositionView): Risk {
@@ -386,7 +434,7 @@ export class TelegramBot {
   }
 
   /** Receipt for an action taken somewhere else (glasses tap or voice). */
-  receipt(source: 'glasses tap' | 'glasses voice', action: ActionKind, coin: string, ok: boolean, message: string, heard?: string) {
+  receipt(source: string, action: ActionKind, coin: string, ok: boolean, message: string, heard?: string) {
     const said = heard ? `\nHeard: “${esc(heard)}”` : '';
     return this.broadcast(
       `${ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> via ${source}${said}\n${esc(message)}`,

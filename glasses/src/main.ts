@@ -211,7 +211,7 @@ function connect() {
       if (mode.kind === 'working' && mode.requestId === msg.requestId) {
         setMode({ kind: 'result', ok: msg.ok, message: msg.message });
       }
-    } else if (mode.kind === 'card') {
+    } else if (msg.type === 'status' && mode.kind === 'card') {
       void show(statusCard(msg.message));
     }
   };
