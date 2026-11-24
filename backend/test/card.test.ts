@@ -16,7 +16,7 @@ import type { PositionView, Snapshot } from '../../shared/protocol.ts';
 const ALLOWED_NON_ASCII = new Set([...'●○▲▼▶◀★━─█╭╮╰╯']);
 const p: PositionView = {
   coin: 'ETH', side: 'LONG', size: 0.9654, leverage: 25, entryPx: 1681.2,
-  markPx: 1678, liqPx: 1636, liqDistancePct: 2.5, unrealizedPnl: -6.83,
+  markPx: 1678, liqPx: 1636, liqDistancePct: 2.5, unrealizedPnl: -6.83, minutesToLiq: 14.2,
 };
 const snap: Snapshot = {
   type: 'snapshot', network: 'testnet', address: '0xc1bBF5a49b4F8B7CF0CE9efa1988f25892a654c7',
@@ -51,6 +51,7 @@ test('cards fit the lens: at most 9 lines', () => {
 
 test('position card shows the risk label and safety bar', () => {
   assert.match(cards.position, /LIQ 2\.5% away {2}▲ DANGER/);
+  assert.match(cards.position, /~14 min to liq/);
   assert.equal(safetyBar(2.5), '█' + '─'.repeat(9));
   assert.equal(safetyBar(25), '█'.repeat(10));
 });

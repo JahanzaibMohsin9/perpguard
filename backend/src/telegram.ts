@@ -94,6 +94,12 @@ export class TelegramBot {
   private username = '';
   private lastRisk = new Map<string, Risk>(); // coin -> last alerted risk level
   private primed = false; // false until the first snapshot after startup has been seen
+  private alertTimes = new Map<string, number>(); // coin -> when the last WARNING/DANGER alert went out
+
+  /** When the last risk alert for this coin was sent (for the "protected N s after the alert" stopwatch). */
+  lastAlertAt(coin: string): number | undefined {
+    return this.alertTimes.get(coin);
+  }
   private stopped = false;
 
   constructor(
@@ -410,6 +416,7 @@ export class TelegramBot {
   }
 
   private alert(p: PositionView, risk: Risk, network: string) {
+    this.alertTimes.set(p.coin, Date.now());
     return this.broadcast(this.alertHtml(p, risk, network), this.deps.runAction ? actionButtons(p.coin) : undefined);
   }
 
@@ -482,7 +489,14 @@ function positionHtml(p: PositionView, risk: Risk, network: string): string {
     `Size ${p.size}  ·  PnL <b>${signed(p.unrealizedPnl)}</b> USDC`,
     `Mark ${fmt(p.markPx)}  ·  Liq ${fmt(p.liqPx)}`,
     `Distance to liquidation: <b>${p.liqDistancePct === null ? '-' : p.liqDistancePct >= 100 ? '>99' : fmt(p.liqDistancePct, 1)}%</b>`,
+    ...(p.minutesToLiq !== null ? [`⏳ At this pace: liquidation in <b>~${fmtMinutes(p.minutesToLiq)}</b>`] : []),
   ].join('\n');
+}
+
+function fmtMinutes(m: number): string {
+  if (m < 1) return 'under 1 min';
+  if (m < 90) return `${Math.round(m)} min`;
+  return `${(m / 60).toFixed(1)} h`;
 }
 
 const HELP = [

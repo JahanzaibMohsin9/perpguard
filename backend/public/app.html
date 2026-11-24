@@ -190,7 +190,7 @@
           <div><div class="label">Liquidation</div><div>${fmt(p.liqPx)}</div></div>
         </div>
         <div class="bar"><i style="width:${width}%;background:${color}"></i></div>
-        <div class="dist">${d === null ? 'No liquidation price' : d >= 100 ? 'More than 99% from liquidation' : `${fmt(d, 1)}% from liquidation`}</div>
+        <div class="dist">${d === null ? 'No liquidation price' : d >= 100 ? 'More than 99% from liquidation' : `${fmt(d, 1)}% from liquidation`}${p.minutesToLiq !== null && p.minutesToLiq !== undefined ? ` · <b>~${p.minutesToLiq < 1 ? '<1' : p.minutesToLiq < 90 ? Math.round(p.minutesToLiq) : (p.minutesToLiq / 60).toFixed(1)}${p.minutesToLiq >= 90 ? ' h' : ' min'}</b> at this pace` : ''}</div>
         ${actions}
       </div>`;
     }).join('');

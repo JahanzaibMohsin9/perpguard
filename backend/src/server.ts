@@ -68,7 +68,8 @@ async function runProtective(action: ActionKind, coin: string): Promise<{ ok: bo
   try {
     const result = await trader.run(action, coin);
     app.log.info({ action, coin, ok: result.ok, detail: result.detail }, 'action');
-    return { ok: result.ok, message: result.message };
+    if (!result.ok) return { ok: false, message: result.message };
+    return { ok: true, message: result.message + (await receiptExtras(coin)) };
   } catch (err) {
     app.log.error({ err, action }, 'action failed');
     return { ok: false, message: 'Action failed. Check the server log.' };
@@ -76,6 +77,26 @@ async function runProtective(action: ActionKind, coin: string): Promise<{ ok: bo
     actionBusy = false;
     void monitorTick();
   }
+}
+
+/** " · liq now 12.4% away · protected 6.1 s after the alert" for receipts. */
+async function receiptExtras(coin: string): Promise<string> {
+  let extra = '';
+  try {
+    if (isAddress(DEFAULT_ADDRESS)) {
+      const snap = await fetchSnapshot(NETWORK, DEFAULT_ADDRESS);
+      const p = snap.positions.find((x) => x.coin === coin);
+      if (!p) extra += ' · position closed';
+      else if (p.liqDistancePct !== null) extra += ` · liq now ${p.liqDistancePct >= 100 ? '>99' : p.liqDistancePct.toFixed(1)}% away`;
+    }
+  } catch {
+    // receipt still goes out without the extra line
+  }
+  const alertedAt = bot?.lastAlertAt(coin);
+  if (alertedAt && Date.now() - alertedAt < 15 * 60_000) {
+    extra += ` · protected ${((Date.now() - alertedAt) / 1000).toFixed(1)} s after the alert`;
+  }
+  return extra;
 }
 
 // ---------- background monitor + Telegram ----------

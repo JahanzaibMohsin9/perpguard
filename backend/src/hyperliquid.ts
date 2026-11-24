@@ -2,6 +2,7 @@
 // Order placement (agent wallet + signing) lives in exchange.ts.
 
 import type { PositionView, Side, Snapshot } from '../../shared/protocol.ts';
+import { markHistory, minutesToLiquidation } from './pace.ts';
 
 export type Network = 'testnet' | 'mainnet';
 
@@ -57,6 +58,7 @@ export async function fetchSnapshot(network: Network, address: string): Promise<
     info<Record<string, string>>(network, { type: 'allMids' }),
     info<SpotState>(network, { type: 'spotClearinghouseState', user: address }),
   ]);
+  markHistory.record(mids);
   // Unified accounts keep collateral as spot USDC; free spot USDC counts toward equity.
   const usdc = spot.balances.find((b) => b.coin === 'USDC');
   const freeSpotUsdc = usdc ? Math.max(0, Number(usdc.total) - Number(usdc.hold)) : 0;
@@ -78,6 +80,7 @@ export async function fetchSnapshot(network: Network, address: string): Promise<
         liqPx,
         liqDistancePct,
         unrealizedPnl: Number(p.unrealizedPnl),
+        minutesToLiq: minutesToLiquidation(markHistory.samples(p.coin), side, markPx, liqPx),
       };
     })
     .filter((p) => p.size > 0)

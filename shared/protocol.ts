@@ -13,6 +13,7 @@ export interface PositionView {
   liqPx: number | null; // null = no liquidation price (e.g. heavily over-collateralised)
   liqDistancePct: number | null; // % the mark must move against us to hit liqPx
   unrealizedPnl: number;
+  minutesToLiq: number | null; // "at this pace" trend estimate; null = not heading toward liquidation
 }
 
 export interface Snapshot {

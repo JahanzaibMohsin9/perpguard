@@ -23,6 +23,14 @@ export function safetyBar(distancePct: number | null): string {
   return '█'.repeat(filled) + '─'.repeat(BAR_CELLS - filled);
 }
 
+/** "~14 min to liq" while price trends toward liquidation (no such glyph as an approx sign on G2). */
+function pace(minutes: number | null): string {
+  if (minutes === null) return '';
+  if (minutes < 1) return '<1 min to liq';
+  if (minutes < 90) return `~${Math.round(minutes)} min to liq`;
+  return `~${(minutes / 60).toFixed(1)} h to liq`;
+}
+
 function riskLabel(distancePct: number | null): string {
   if (distancePct === null) return 'SAFE';
   if (distancePct < 3) return '▲ DANGER';
@@ -43,7 +51,7 @@ export function positionCard(snap: Snapshot, p: PositionView, index: number): st
     `PnL ${fmtSigned(p.unrealizedPnl)} USDC`,
     `Mark ${fmtPx(p.markPx)}   Liq ${fmtPx(p.liqPx)}`,
     `LIQ ${dist}  ${riskLabel(p.liqDistancePct)}`,
-    safetyBar(p.liqDistancePct),
+    `${safetyBar(p.liqDistancePct)}  ${pace(p.minutesToLiq)}`,
     '',
     hints(snap),
   ].join('\n');
