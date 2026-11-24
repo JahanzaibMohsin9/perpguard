@@ -5,6 +5,7 @@ import type { WebSocket } from 'ws';
 import { ACTION_LABELS, type ActionKind, type ClientMessage, type ServerMessage } from '../../shared/protocol.ts';
 import { agentKeyFromEnv, Trader } from './exchange.ts';
 import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
+import { loadWhisper, parseCommand, transcribe } from './voice.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const POLL_MS = Math.max(1000, Number(process.env.POLL_MS ?? 3000));
@@ -25,14 +26,33 @@ if (NETWORK !== 'testnet') {
   app.log.warn('HL_AGENT_KEY set but HL_WATCH_ADDRESS (the master account) is missing: read-only mode.');
 } else {
   const t = new Trader(NETWORK, DEFAULT_ADDRESS, agentKey);
-  const v = await t.verify().catch((err: Error) => ({ ok: false, reason: err.message }));
-  if (v.ok) {
-    trader = t;
-    app.log.info(`Trading enabled: agent ${t.agent.address} for ${DEFAULT_ADDRESS}`);
-  } else {
-    app.log.warn(`Trading disabled: ${v.reason}`);
-  }
+  // Network errors are retried; a definite "not approved" answer is final.
+  const tryVerify = async (attempt: number): Promise<void> => {
+    try {
+      const v = await t.verify();
+      if (v.ok) {
+        trader = t;
+        app.log.info(`Trading enabled: agent ${t.agent.address} for ${DEFAULT_ADDRESS}`);
+      } else app.log.warn(`Trading disabled: ${v.reason}`);
+    } catch (err) {
+      const wait = Math.min(30_000, 2_000 * attempt);
+      app.log.warn(`Agent check failed (${(err as Error).message}); retrying in ${wait / 1000}s`);
+      setTimeout(() => void tryVerify(attempt + 1), wait);
+    }
+  };
+  await tryVerify(1);
 }
+
+// Warm up Whisper in the background so the first voice command is fast.
+const VOICE_ENABLED = process.env.VOICE !== 'off';
+if (VOICE_ENABLED) {
+  const t0 = Date.now();
+  loadWhisper().then(
+    () => app.log.info(`Whisper ready in ${Date.now() - t0} ms`),
+    (err) => app.log.error({ err }, 'Whisper failed to load: voice disabled'),
+  );
+}
+const MAX_VOICE_BYTES = 16_000 * 2 * 10; // 10 s of 16 kHz s16le
 
 const ACTIONS = new Set<ActionKind>(Object.keys(ACTION_LABELS) as ActionKind[]);
 
@@ -96,6 +116,29 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     }
   };
 
+  let voiceBusy = false;
+  const runVoice = async (msg: Extract<ClientMessage, { type: 'voice' }>) => {
+    const reply = (transcript: string, command: { action: ActionKind; coin: string } | null) =>
+      send(socket, { type: 'voiceResult', requestId: msg.requestId, transcript, command });
+    if (!VOICE_ENABLED || voiceBusy) return reply('', null);
+    voiceBusy = true;
+    try {
+      const pcm = Buffer.from(msg.pcm, 'base64').subarray(0, MAX_VOICE_BYTES);
+      const t0 = Date.now();
+      const transcript = await transcribe(pcm);
+      const coins = (msg.coins ?? []).filter((c) => /^[A-Z0-9]{1,12}$/.test(c));
+      const parsed = parseCommand(transcript, coins);
+      const coin = parsed?.coin ?? msg.screenCoin;
+      req.log.info({ transcript, parsed, ms: Date.now() - t0 }, 'voice');
+      reply(transcript, parsed && coin ? { action: parsed.action, coin } : null);
+    } catch (err) {
+      req.log.error({ err }, 'voice failed');
+      reply('', null);
+    } finally {
+      voiceBusy = false;
+    }
+  };
+
   socket.on('message', (raw) => {
     let msg: ClientMessage;
     try {
@@ -110,6 +153,8 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       void poll();
     } else if (msg.type === 'action') {
       void runAction(msg);
+    } else if (msg.type === 'voice' && typeof msg.pcm === 'string') {
+      void runVoice(msg);
     }
   });
 

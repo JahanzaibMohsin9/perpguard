@@ -48,9 +48,18 @@ export interface ActionResultMessage {
   message: string; // short, glasses-safe text
 }
 
-export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage;
+export interface VoiceResultMessage {
+  type: 'voiceResult';
+  requestId: string;
+  transcript: string;
+  command: { action: ActionKind; coin: string } | null; // null = no known phrase heard
+}
+
+export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
   | { type: 'refresh' }
-  | { type: 'action'; requestId: string; action: ActionKind; coin: string };
+  | { type: 'action'; requestId: string; action: ActionKind; coin: string }
+  // Push-to-talk audio: base64 of 16 kHz mono s16le PCM. screenCoin = position shown on the glasses.
+  | { type: 'voice'; requestId: string; pcm: string; screenCoin: string | null; coins: string[] };

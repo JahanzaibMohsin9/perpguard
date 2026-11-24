@@ -1,4 +1,5 @@
 import {
+  AudioInputSource,
   OsEventTypeList,
   CreateStartUpPageContainer,
   StartUpPageCreateResult,
@@ -9,7 +10,19 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
 import type { ActionKind, ClientMessage, PositionView, ServerMessage, Snapshot } from '../../shared/protocol.ts';
-import { confirmCard, emptyCard, MENU, menuCard, positionCard, resultCard, statusCard, workingCard } from './card.ts';
+import {
+  confirmCard,
+  emptyCard,
+  listeningCard,
+  MENU,
+  menuCard,
+  notUnderstoodCard,
+  positionCard,
+  resultCard,
+  statusCard,
+  thinkingCard,
+  workingCard,
+} from './card.ts';
 
 const BACKEND_URL: string = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:8787';
 const WS_URL = BACKEND_URL.replace(/^http/, 'ws') + '/ws';
@@ -27,12 +40,20 @@ let positionIndex = 0;
 type Mode =
   | { kind: 'card' }
   | { kind: 'menu'; coin: string; selected: number }
-  | { kind: 'confirm'; coin: string; action: ActionKind; expires: number }
+  | { kind: 'confirm'; coin: string; action: ActionKind; expires: number; heard?: string }
+  | { kind: 'listening'; started: number }
+  | { kind: 'thinking'; requestId: string }
+  | { kind: 'notUnderstood'; transcript: string }
   | { kind: 'working'; coin: string; action: ActionKind; requestId: string }
   | { kind: 'result'; ok: boolean; message: string };
 let mode: Mode = { kind: 'card' };
 const CONFIRM_TIMEOUT_MS = 10_000; // a stale confirm screen must never fire later
 let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Push-to-talk audio buffer (16 kHz mono s16le chunks from the glasses mic).
+const MAX_LISTEN_MS = 8_000;
+let audioChunks: Uint8Array[] = [];
+let listenTicker: ReturnType<typeof setInterval> | undefined;
 
 const mirror = document.getElementById('mirror')!;
 
@@ -64,6 +85,10 @@ function setMode(next: Mode) {
     confirmTimer = setTimeout(() => {
       if (mode === next) setMode({ kind: 'card' });
     }, CONFIRM_TIMEOUT_MS);
+  } else if (next.kind === 'thinking') {
+    confirmTimer = setTimeout(() => {
+      if (mode === next) setMode({ kind: 'notUnderstood', transcript: '' });
+    }, 20_000);
   } else if (next.kind === 'working') {
     confirmTimer = setTimeout(() => {
       if (mode === next) setMode({ kind: 'result', ok: false, message: 'No reply in 20s. Check the position before retrying.' });
@@ -86,13 +111,68 @@ function render() {
     }
     case 'confirm': {
       const p = positionFor(mode.coin);
-      return void (p ? show(confirmCard(p, mode.action)) : setMode({ kind: 'card' }));
+      return void (p ? show(confirmCard(p, mode.action, mode.heard)) : setMode({ kind: 'card' }));
     }
     case 'working':
       return void show(workingCard(mode.action, mode.coin));
     case 'result':
       return void show(resultCard(mode.ok, mode.message));
+    case 'listening':
+      return void show(listeningCard((Date.now() - mode.started) / 1000));
+    case 'thinking':
+      return void show(thinkingCard());
+    case 'notUnderstood':
+      return void show(notUnderstoodCard(mode.transcript));
   }
+}
+
+// ---------- voice (push-to-talk) ----------
+
+function toBytes(pcm: unknown): Uint8Array {
+  if (pcm instanceof Uint8Array) return pcm;
+  if (Array.isArray(pcm)) return Uint8Array.from(pcm as number[]);
+  if (typeof pcm === 'string') return Uint8Array.from(atob(pcm), (c) => c.charCodeAt(0));
+  return new Uint8Array(0);
+}
+
+function base64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function startListening() {
+  if (!bridge || ws?.readyState !== WebSocket.OPEN || !lastSnapshot?.canTrade) return;
+  audioChunks = [];
+  const ok = await bridge.audioControl(true, AudioInputSource.Glasses).catch(() => false);
+  if (!ok) return setMode({ kind: 'result', ok: false, message: 'Microphone unavailable.' });
+  setMode({ kind: 'listening', started: Date.now() });
+  clearInterval(listenTicker);
+  listenTicker = setInterval(() => {
+    if (mode.kind !== 'listening') return clearInterval(listenTicker);
+    if (Date.now() - mode.started > MAX_LISTEN_MS) void stopListening();
+    else render();
+  }, 500);
+}
+
+async function stopListening() {
+  if (mode.kind !== 'listening') return;
+  clearInterval(listenTicker);
+  await bridge?.audioControl(false).catch(() => false);
+  const total = audioChunks.reduce((n, c) => n + c.length, 0);
+  const pcm = new Uint8Array(total);
+  let off = 0;
+  for (const c of audioChunks) (pcm.set(c, off), (off += c.length));
+  audioChunks = [];
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  setMode({ kind: 'thinking', requestId });
+  sendToServer({
+    type: 'voice',
+    requestId,
+    pcm: base64(pcm),
+    screenCoin: currentPosition()?.coin ?? null,
+    coins: lastSnapshot?.positions.map((p) => p.coin) ?? [],
+  });
 }
 
 const renderSnapshot = () => {
@@ -119,6 +199,13 @@ function connect() {
     if (msg.type === 'snapshot') {
       lastSnapshot = msg;
       renderSnapshot();
+    } else if (msg.type === 'voiceResult') {
+      if (mode.kind === 'thinking' && mode.requestId === msg.requestId) {
+        const cmd = msg.command;
+        if (cmd && positionFor(cmd.coin)) {
+          setMode({ kind: 'confirm', coin: cmd.coin, action: cmd.action, expires: Date.now() + CONFIRM_TIMEOUT_MS, heard: msg.transcript });
+        } else setMode({ kind: 'notUnderstood', transcript: msg.transcript });
+      }
     } else if (msg.type === 'actionResult') {
       if (mode.kind === 'working' && mode.requestId === msg.requestId) {
         setMode({ kind: 'result', ok: msg.ok, message: msg.message });
@@ -129,6 +216,10 @@ function connect() {
   };
   ws.onclose = () => {
     ws = null;
+    if (mode.kind === 'listening') {
+      clearInterval(listenTicker);
+      void bridge?.audioControl(false).catch(() => false);
+    }
     if (mode.kind === 'working') mode = { kind: 'result', ok: false, message: 'Connection lost. Check the position before retrying.' };
     else mode = { kind: 'card' };
     void show(statusCard('Server offline. Reconnecting...'));
@@ -145,6 +236,10 @@ function eventTypeOf(event: EvenHubEvent): { type: OsEventTypeList | undefined; 
 }
 
 async function onEvent(event: EvenHubEvent) {
+  if (event.audioEvent) {
+    if (mode.kind === 'listening') audioChunks.push(toBytes(event.audioEvent.audioPcm));
+    return;
+  }
   const { type, isInput } = eventTypeOf(event);
   if (!isInput) return; // audio / menu events are handled elsewhere (later)
 
@@ -156,7 +251,20 @@ async function onEvent(event: EvenHubEvent) {
     // Even Hub review rule: double tap on the root page opens the system exit dialog.
     // Inside sub-screens it acts as "back" instead.
     if (mode.kind === 'card') await bridge?.shutDownPageContainer(1);
-    else if (mode.kind !== 'working') setMode({ kind: 'card' });
+    else if (mode.kind === 'listening') {
+      clearInterval(listenTicker);
+      audioChunks = [];
+      await bridge?.audioControl(false).catch(() => false); // cancel: never leave the mic open
+      setMode({ kind: 'card' });
+    } else if (mode.kind !== 'working') setMode({ kind: 'card' });
+    return;
+  }
+  if (type === OsEventTypeList.LONG_PRESS_EVENT) {
+    if (mode.kind === 'card' || mode.kind === 'menu' || mode.kind === 'notUnderstood' || mode.kind === 'result') await startListening();
+    return;
+  }
+  if (type === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) {
+    await stopListening();
     return;
   }
   if (type === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
@@ -197,9 +305,14 @@ async function onEvent(event: EvenHubEvent) {
         sendToServer({ type: 'action', requestId, action: mode.action, coin: mode.coin });
       }
       break;
+    case 'listening':
+      if (isClick) await stopListening(); // fallback if the release event never arrives
+      break;
     case 'working':
-      break; // ignore input while the order is in flight
+    case 'thinking':
+      break; // ignore input while busy
     case 'result':
+    case 'notUnderstood':
       if (isClick) setMode({ kind: 'card' });
       break;
   }

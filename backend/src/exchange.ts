@@ -44,7 +44,7 @@ interface ExchangeResponse {
   response: string | { type: string; data?: { statuses?: Array<Record<string, any> | string> } };
 }
 
-async function exchange(agent: PrivateKeyAccount, network: Network, action: unknown): Promise<ExchangeResponse> {
+export async function exchange(agent: PrivateKeyAccount, network: Network, action: unknown): Promise<ExchangeResponse> {
   const nonce = nextNonce();
   const signature = await signL1(agent, network, action, nonce);
   const res = await fetch(`${API_URL[network]}/exchange`, {
@@ -59,17 +59,17 @@ async function exchange(agent: PrivateKeyAccount, network: Network, action: unkn
 
 // ---------- number formatting (matches SDK float_to_wire + price rules) ----------
 
-function toWire(x: number): string {
+export function toWire(x: number): string {
   const s = x.toFixed(8).replace(/\.?0+$/, '');
   return s === '-0' ? '0' : s;
 }
 
 /** Perp prices: max 5 significant figures and max (6 - szDecimals) decimals. */
-function roundPx(px: number, szDecimals: number): number {
+export function roundPx(px: number, szDecimals: number): number {
   return Number(Number(px.toPrecision(5)).toFixed(Math.max(0, 6 - szDecimals)));
 }
 
-function roundSz(sz: number, szDecimals: number): number {
+export function roundSz(sz: number, szDecimals: number): number {
   return Number(sz.toFixed(szDecimals));
 }
 
@@ -82,7 +82,7 @@ interface AssetMeta {
 
 let metaCache: { network: Network; byName: Map<string, AssetMeta> } | null = null;
 
-async function assetMeta(network: Network, coin: string): Promise<AssetMeta> {
+export async function assetMeta(network: Network, coin: string): Promise<AssetMeta> {
   if (!metaCache || metaCache.network !== network) {
     const meta = await info<{ universe: Array<{ name: string; szDecimals: number }> }>(network, { type: 'meta' });
     metaCache = { network, byName: new Map(meta.universe.map((u, index) => [u.name, { index, szDecimals: u.szDecimals }])) };
@@ -108,7 +108,7 @@ async function livePosition(network: Network, user: string, coin: string): Promi
   return { coin, szi: Number(p.szi), entryPx: Number(p.entryPx) };
 }
 
-async function markPx(network: Network, coin: string): Promise<number> {
+export async function markPx(network: Network, coin: string): Promise<number> {
   const mids = await info<Record<string, string>>(network, { type: 'allMids' });
   const px = Number(mids[coin]);
   if (!Number.isFinite(px) || px <= 0) throw new Error(`No price for ${coin}`);

@@ -50,8 +50,8 @@ export function positionCard(snap: Snapshot, p: PositionView, index: number): st
 }
 
 function hints(snap: Snapshot): string {
-  const tap = snap.canTrade ? 'tap actions' : 'tap refresh';
-  return snap.positions.length > 1 ? `> ${tap}  scroll next  2x exit` : `> ${tap}   2x tap exit`;
+  if (!snap.canTrade) return snap.positions.length > 1 ? '> tap refresh  scroll next  2x exit' : '> tap refresh   2x tap exit';
+  return '> tap actions  hold speak  2x exit';
 }
 
 const RULE = '━━━━━━━━━━━━━━━━━━━━━━━━━━';
@@ -69,7 +69,7 @@ export function menuCard(p: PositionView, selected: number): string {
   ].join('\n');
 }
 
-export function confirmCard(p: PositionView, kind: ActionKind): string {
+export function confirmCard(p: PositionView, kind: ActionKind, heard?: string): string {
   const detail: Record<ActionKind, string> = {
     close50: `Sell half: ${+(p.size / 2).toPrecision(6)} of ${p.size} ${p.coin}`,
     closeAll: `Exit the whole ${p.size} ${p.coin}`,
@@ -84,7 +84,7 @@ export function confirmCard(p: PositionView, kind: ActionKind): string {
     RULE,
     `${ACTION_LABELS[kind]}  ${p.coin} ${p.side} ${p.leverage}x`,
     detail[kind],
-    'Testnet order, reduce-only.',
+    heard ? `Heard: "${heard.slice(0, 26)}"` : 'Testnet order, reduce-only.',
     '',
     '> tap = YES    scroll = cancel',
   ].join('\n');
@@ -115,6 +115,34 @@ function wrap(text: string, width: number): string[] {
   }
   if (line) out.push(line);
   return out.slice(0, 4);
+}
+
+export function listeningCard(seconds: number): string {
+  return [
+    'PERPGUARD  ● LISTENING',
+    RULE,
+    'Say a command, then release:',
+    '  "close half"   "close all"',
+    '  "break even"   "two percent stop"',
+    '',
+    `${'█'.repeat(Math.min(10, Math.ceil(seconds)))}${'─'.repeat(Math.max(0, 10 - Math.ceil(seconds)))}  ${seconds.toFixed(1)}s`,
+  ].join('\n');
+}
+
+export function thinkingCard(): string {
+  return ['PERPGUARD  ○ HEARING', RULE, 'Transcribing on your PC...'].join('\n');
+}
+
+export function notUnderstoodCard(transcript: string): string {
+  return [
+    'PERPGUARD  ▲ NOT A COMMAND',
+    RULE,
+    transcript ? `Heard: "${transcript.slice(0, 26)}"` : 'Heard nothing.',
+    'Try: close half / close all /',
+    '     break even / two percent stop',
+    '',
+    '> tap back   hold to retry',
+  ].join('\n');
 }
 
 export function emptyCard(snap: Snapshot): string {
