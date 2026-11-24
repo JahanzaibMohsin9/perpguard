@@ -5,7 +5,9 @@ import type { WebSocket } from 'ws';
 import { ACTION_LABELS, type ActionKind, type ClientMessage, type ServerMessage } from '../../shared/protocol.ts';
 import { agentKeyFromEnv, Trader } from './exchange.ts';
 import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
+import { TelegramBot } from './telegram.ts';
 import { loadWhisper, parseCommand, transcribe } from './voice.ts';
+import type { Snapshot } from '../../shared/protocol.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const POLL_MS = Math.max(1000, Number(process.env.POLL_MS ?? 3000));
@@ -54,6 +56,59 @@ if (VOICE_ENABLED) {
 }
 const MAX_VOICE_BYTES = 16_000 * 2 * 10; // 10 s of 16 kHz s16le
 
+// ---------- protective actions (shared by glasses and Telegram; one at a time) ----------
+let actionBusy = false;
+async function runProtective(action: ActionKind, coin: string): Promise<{ ok: boolean; message: string }> {
+  if (!trader) return { ok: false, message: 'Trading not linked for this wallet.' };
+  if (actionBusy) return { ok: false, message: 'Another action is still running.' };
+  actionBusy = true;
+  try {
+    const result = await trader.run(action, coin);
+    app.log.info({ action, coin, ok: result.ok, detail: result.detail }, 'action');
+    return { ok: result.ok, message: result.message };
+  } catch (err) {
+    app.log.error({ err, action }, 'action failed');
+    return { ok: false, message: 'Action failed. Check the server log.' };
+  } finally {
+    actionBusy = false;
+    void monitorTick();
+  }
+}
+
+// ---------- background monitor + Telegram ----------
+let latest: Snapshot | null = null;
+let monitorInFlight = false;
+async function monitorTick() {
+  if (!isAddress(DEFAULT_ADDRESS) || monitorInFlight) return;
+  monitorInFlight = true;
+  try {
+    latest = { ...(await fetchSnapshot(NETWORK, DEFAULT_ADDRESS)), canTrade: Boolean(trader) };
+    await bot?.onSnapshot(latest);
+  } catch (err) {
+    app.log.warn(`monitor: ${(err as Error).message}`);
+  } finally {
+    monitorInFlight = false;
+  }
+}
+
+let bot: TelegramBot | null = null;
+const TG_TOKEN = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
+if (TG_TOKEN) {
+  const tg = new TelegramBot(TG_TOKEN, process.env.TELEGRAM_PROXY?.trim() || undefined, {
+    getSnapshot: async () => {
+      await monitorTick();
+      return latest;
+    },
+    runAction: (action, coin) => runProtective(action, coin),
+    log: { info: (m) => app.log.info(m), warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o, m) },
+  });
+  tg.start().then(
+    () => (bot = tg),
+    (err: Error) => app.log.error(`Telegram disabled: ${err.message}`),
+  );
+}
+setInterval(() => void monitorTick(), Math.max(POLL_MS, 5000));
+
 const ACTIONS = new Set<ActionKind>(Object.keys(ACTION_LABELS) as ActionKind[]);
 
 await app.register(cors, { origin: true });
@@ -69,7 +124,6 @@ app.get('/ws', { websocket: true }, (socket, req) => {
   let address = isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : '';
   let timer: NodeJS.Timeout | undefined;
   let inFlight = false;
-  let actionBusy = false;
 
   const canTrade = () => Boolean(trader && address.toLowerCase() === trader.master.toLowerCase());
 
@@ -101,19 +155,11 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       send(socket, { type: 'actionResult', requestId: msg.requestId, ok, message });
     if (!trader || !canTrade()) return reply(false, 'Trading not linked for this wallet.');
     if (!ACTIONS.has(msg.action) || !/^[A-Z0-9]{1,12}$/.test(msg.coin)) return reply(false, 'Invalid action.');
-    if (actionBusy) return reply(false, 'Another action is still running.');
-    actionBusy = true;
-    try {
-      const result = await trader.run(msg.action, msg.coin);
-      req.log.info({ action: msg.action, coin: msg.coin, ok: result.ok, detail: result.detail }, 'action');
-      reply(result.ok, result.message);
-    } catch (err) {
-      req.log.error({ err, action: msg.action }, 'action failed');
-      reply(false, 'Action failed. Check the server log.');
-    } finally {
-      actionBusy = false;
-      void poll(); // show the new position state right away
-    }
+    const result = await runProtective(msg.action, msg.coin);
+    reply(result.ok, result.message);
+    const heard = typeof msg.heard === 'string' && msg.heard ? msg.heard.slice(0, 80) : undefined;
+    void bot?.receipt(heard ? 'glasses voice' : 'glasses tap', msg.action, msg.coin, result.ok, result.message, heard);
+    void poll(); // show the new position state right away
   };
 
   let voiceBusy = false;

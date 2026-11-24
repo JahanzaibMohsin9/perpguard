@@ -2,6 +2,7 @@ import {
   AudioInputSource,
   OsEventTypeList,
   CreateStartUpPageContainer,
+  RebuildPageContainer,
   StartUpPageCreateResult,
   TextContainerProperty,
   TextContainerUpgrade,
@@ -302,7 +303,7 @@ async function onEvent(event: EvenHubEvent) {
         }
         const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         setMode({ kind: 'working', coin: mode.coin, action: mode.action, requestId });
-        sendToServer({ type: 'action', requestId, action: mode.action, coin: mode.coin });
+        sendToServer({ type: 'action', requestId, action: mode.action, coin: mode.coin, heard: mode.heard });
       }
       break;
     case 'listening':
@@ -332,25 +333,29 @@ async function startGlasses(): Promise<void> {
   }
   bridge = found;
 
-  const result = await bridge.createStartUpPageContainer(
-    new CreateStartUpPageContainer({
-      containerTotalNum: 1,
-      textObject: [
-        new TextContainerProperty({
-          xPosition: 8,
-          yPosition: 8,
-          width: 560,
-          height: 272,
-          containerID: CARD.id,
-          containerName: CARD.name,
-          content: statusCard('Starting...'),
-          isEventCapture: 1,
-        }),
-      ],
-    }),
-  );
+  const page = () => ({
+    containerTotalNum: 1,
+    textObject: [
+      new TextContainerProperty({
+        xPosition: 8,
+        yPosition: 8,
+        width: 560,
+        height: 272,
+        containerID: CARD.id,
+        containerName: CARD.name,
+        content: statusCard('Starting...'),
+        isEventCapture: 1,
+      }),
+    ],
+  });
+  const result = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer(page()));
   glassesReady = result === StartUpPageCreateResult.success;
-  if (!glassesReady) console.error('[perpguard] createStartUpPageContainer failed:', result);
+  if (!glassesReady) {
+    // The WebView reloaded while our page still exists on the glasses: rebuild it instead.
+    console.warn('[perpguard] createStartUpPageContainer returned', result, '- rebuilding page');
+    glassesReady = await bridge.rebuildPageContainer(new RebuildPageContainer(page())).catch(() => false);
+    if (!glassesReady) console.error('[perpguard] rebuildPageContainer failed: glasses display unavailable');
+  }
 
   bridge.onEvenHubEvent((e) => void onEvent(e));
 }

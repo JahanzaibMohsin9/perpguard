@@ -60,6 +60,6 @@ export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | Voi
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
   | { type: 'refresh' }
-  | { type: 'action'; requestId: string; action: ActionKind; coin: string }
+  | { type: 'action'; requestId: string; action: ActionKind; coin: string; heard?: string } // heard = voice transcript
   // Push-to-talk audio: base64 of 16 kHz mono s16le PCM. screenCoin = position shown on the glasses.
   | { type: 'voice'; requestId: string; pcm: string; screenCoin: string | null; coins: string[] };
