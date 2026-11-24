@@ -73,6 +73,7 @@ function actionButtons(coin: string): Keyboard {
 }
 
 const CONFIRM_TTL_MS = 60_000;
+const HYSTERESIS_PCT = 0.5;
 
 // ---------- bot ----------
 
@@ -92,6 +93,7 @@ export class TelegramBot {
   private offset = 0;
   private username = '';
   private lastRisk = new Map<string, Risk>(); // coin -> last alerted risk level
+  private primed = false; // false until the first snapshot after startup has been seen
   private stopped = false;
 
   constructor(
@@ -402,11 +404,19 @@ export class TelegramBot {
     const seen = new Set<string>();
     for (const p of snap.positions) {
       seen.add(p.coin);
-      const now = this.risk(p);
       const before = this.lastRisk.get(p.coin);
+      let now = this.risk(p);
+      // Hysteresis: only step DOWN a level once clearly past the threshold, so a price hovering at
+      // the boundary cannot spam alternating alerts.
+      if (before && RISK_ORDER[now] < RISK_ORDER[before] && p.liqDistancePct !== null) {
+        const threshold = before === 'DANGER' ? this.state.dangerPct : this.state.warnPct;
+        if (p.liqDistancePct < threshold + HYSTERESIS_PCT) now = before;
+      }
       this.lastRisk.set(p.coin, now);
       if (before === undefined) {
-        if (now !== 'OK') await this.alert(p, now, snap.network); // first sight of a risky position
+        // First sight of a risky position. Right after a server restart we only record the level,
+        // so restarts don't re-send alerts (newly linked chats get the current risks on /start).
+        if (now !== 'OK' && this.primed) await this.alert(p, now, snap.network);
       } else if (RISK_ORDER[now] > RISK_ORDER[before]) {
         await this.alert(p, now, snap.network);
       } else if (now === 'OK' && before !== 'OK') {
@@ -414,6 +424,7 @@ export class TelegramBot {
       }
     }
     for (const coin of this.lastRisk.keys()) if (!seen.has(coin)) this.lastRisk.delete(coin);
+    this.primed = true;
   }
 
   private alertHtml(p: PositionView, risk: Risk, network: string) {

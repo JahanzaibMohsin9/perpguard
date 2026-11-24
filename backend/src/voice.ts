@@ -33,7 +33,8 @@ export async function transcribe(pcm: Uint8Array): Promise<string> {
   for (const x of audio) sumSq += x * x;
   if (Math.sqrt(sumSq / audio.length) < 0.004) return '';
   const model = await loadWhisper();
-  const result = await model(audio);
+  // Commands are a few words: cap the output so Whisper cannot loop on repeated phrases.
+  const result = await model(audio, { max_new_tokens: 24 } as Record<string, unknown>);
   const text = Array.isArray(result) ? result.map((r) => r.text).join(' ') : result.text;
   return text.trim();
 }

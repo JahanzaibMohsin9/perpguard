@@ -4,6 +4,7 @@
 //
 // Usage (from backend/, uses HL_AGENT_KEY + HL_WATCH_ADDRESS from .env):
 //   npx tsx --env-file=.env scripts/demo-position.ts open ETH 20 300   -> isolated 20x long, ~$300 notional
+//   npx tsx --env-file=.env scripts/demo-position.ts leverage ETH 25   -> change isolated leverage
 //   npx tsx --env-file=.env scripts/demo-position.ts margin ETH -3     -> remove $3 isolated margin (riskier)
 //   npx tsx --env-file=.env scripts/demo-position.ts margin ETH 5      -> add $5 margin (safer)
 
@@ -34,6 +35,10 @@ if (cmd === 'open') {
     grouping: 'na',
   });
   console.log('open:', JSON.stringify(res));
+} else if (cmd === 'leverage') {
+  const leverage = Number(arg1 ?? 25);
+  const res = await exchange(trader.agent, NETWORK, { type: 'updateLeverage', asset: a, isCross: false, leverage });
+  console.log('leverage:', JSON.stringify(res));
 } else if (cmd === 'margin') {
   const usd = Number(arg1);
   if (!Number.isFinite(usd) || usd === 0) throw new Error('margin needs a non-zero USD amount');

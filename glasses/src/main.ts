@@ -302,8 +302,9 @@ async function onEvent(event: EvenHubEvent) {
           break;
         }
         const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        setMode({ kind: 'working', coin: mode.coin, action: mode.action, requestId });
-        sendToServer({ type: 'action', requestId, action: mode.action, coin: mode.coin, heard: mode.heard });
+        const { coin, action, heard } = mode; // read before setMode replaces the confirm state
+        setMode({ kind: 'working', coin, action, requestId });
+        sendToServer({ type: 'action', requestId, action, coin, heard });
       }
       break;
     case 'listening':
