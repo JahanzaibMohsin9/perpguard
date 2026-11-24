@@ -21,6 +21,7 @@ export interface Snapshot {
   address: string;
   accountValue: number;
   positions: PositionView[];
+  canTrade: boolean; // an approved agent wallet is linked for this address
   ts: number;
 }
 
@@ -30,8 +31,26 @@ export interface StatusMessage {
   message: string; // short, glasses-safe text (no emoji)
 }
 
-export type ServerMessage = Snapshot | StatusMessage;
+/** Protective-only actions. PerpGuard never opens or increases a position. */
+export type ActionKind = 'close50' | 'closeAll' | 'stopBreakEven' | 'stop2pct';
+
+export const ACTION_LABELS: Record<ActionKind, string> = {
+  close50: 'Close 50%',
+  closeAll: 'Close all',
+  stopBreakEven: 'Stop at break-even',
+  stop2pct: 'Stop 2% away',
+};
+
+export interface ActionResultMessage {
+  type: 'actionResult';
+  requestId: string;
+  ok: boolean;
+  message: string; // short, glasses-safe text
+}
+
+export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
-  | { type: 'refresh' };
+  | { type: 'refresh' }
+  | { type: 'action'; requestId: string; action: ActionKind; coin: string };

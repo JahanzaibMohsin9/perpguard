@@ -1,16 +1,16 @@
 // Read-only Hyperliquid access via the public /info endpoint (no keys needed).
-// Order placement (agent wallet + signing) comes later, in a separate module.
+// Order placement (agent wallet + signing) lives in exchange.ts.
 
 import type { PositionView, Side, Snapshot } from '../../shared/protocol.ts';
 
 export type Network = 'testnet' | 'mainnet';
 
-const API_URL: Record<Network, string> = {
+export const API_URL: Record<Network, string> = {
   testnet: 'https://api.hyperliquid-testnet.xyz',
   mainnet: 'https://api.hyperliquid.xyz',
 };
 
-async function info<T>(network: Network, body: unknown): Promise<T> {
+export async function info<T>(network: Network, body: unknown): Promise<T> {
   const res = await fetch(`${API_URL[network]}/info`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,15 +36,23 @@ interface ClearinghouseState {
   }>;
 }
 
+interface SpotState {
+  balances: Array<{ coin: string; total: string; hold: string }>;
+}
+
 export function isAddress(s: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(s);
 }
 
-export async function fetchSnapshot(network: Network, address: string): Promise<Snapshot> {
-  const [state, mids] = await Promise.all([
+export async function fetchSnapshot(network: Network, address: string): Promise<Omit<Snapshot, 'canTrade'>> {
+  const [state, mids, spot] = await Promise.all([
     info<ClearinghouseState>(network, { type: 'clearinghouseState', user: address }),
     info<Record<string, string>>(network, { type: 'allMids' }),
+    info<SpotState>(network, { type: 'spotClearinghouseState', user: address }),
   ]);
+  // Unified accounts keep collateral as spot USDC; free spot USDC counts toward equity.
+  const usdc = spot.balances.find((b) => b.coin === 'USDC');
+  const freeSpotUsdc = usdc ? Math.max(0, Number(usdc.total) - Number(usdc.hold)) : 0;
 
   const positions: PositionView[] = state.assetPositions
     .map(({ position: p }) => {
@@ -78,7 +86,7 @@ export async function fetchSnapshot(network: Network, address: string): Promise<
     type: 'snapshot',
     network,
     address,
-    accountValue: Number(state.marginSummary.accountValue),
+    accountValue: Number(state.marginSummary.accountValue) + freeSpotUsdc,
     positions,
     ts: Date.now(),
   };

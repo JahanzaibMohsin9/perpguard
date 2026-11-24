@@ -1,7 +1,7 @@
 // Pure text rendering for the 576x288 glasses card.
 // Only glyphs known to render on G2: ● ○ ▲ ▼ ▶ ◀ ★ ━ ─ █ ╭╮╰╯ (emoji are silently dropped).
 
-import type { PositionView, Snapshot } from '../../shared/protocol.ts';
+import { ACTION_LABELS, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
 
 const BAR_CELLS = 10;
 const BAR_FULL_AT_PCT = 20; // 20%+ away from liquidation = full safety bar
@@ -45,8 +45,76 @@ export function positionCard(snap: Snapshot, p: PositionView, index: number): st
     `LIQ ${dist}  ${riskLabel(p.liqDistancePct)}`,
     safetyBar(p.liqDistancePct),
     '',
-    snap.positions.length > 1 ? '> tap refresh  scroll next  2x exit' : '> tap refresh   2x tap exit',
+    hints(snap),
   ].join('\n');
+}
+
+function hints(snap: Snapshot): string {
+  const tap = snap.canTrade ? 'tap actions' : 'tap refresh';
+  return snap.positions.length > 1 ? `> ${tap}  scroll next  2x exit` : `> ${tap}   2x tap exit`;
+}
+
+const RULE = '━━━━━━━━━━━━━━━━━━━━━━━━━━';
+
+/** Menu entries in display order. null = "Back". */
+export const MENU: Array<ActionKind | null> = ['close50', 'closeAll', 'stopBreakEven', 'stop2pct', null];
+
+export function menuCard(p: PositionView, selected: number): string {
+  return [
+    `PERPGUARD  ▶ ACTIONS  ${p.coin} ${p.side}`,
+    RULE,
+    ...MENU.map((k, i) => `${i === selected ? '▶' : ' '} ${k ? ACTION_LABELS[k] : 'Back'}`),
+    '',
+    '> scroll move   tap choose',
+  ].join('\n');
+}
+
+export function confirmCard(p: PositionView, kind: ActionKind): string {
+  const detail: Record<ActionKind, string> = {
+    close50: `Sell half: ${+(p.size / 2).toPrecision(6)} of ${p.size} ${p.coin}`,
+    closeAll: `Exit the whole ${p.size} ${p.coin}`,
+    stopBreakEven: `Stop-loss at entry ${fmtPx(p.entryPx)}`,
+    stop2pct: `Stop-loss 2% from mark ${fmtPx(p.markPx)}`,
+  };
+  if (p.side === 'SHORT') {
+    detail.close50 = detail.close50.replace('Sell', 'Buy back');
+  }
+  return [
+    `PERPGUARD  ▲ CONFIRM`,
+    RULE,
+    `${ACTION_LABELS[kind]}  ${p.coin} ${p.side} ${p.leverage}x`,
+    detail[kind],
+    'Testnet order, reduce-only.',
+    '',
+    '> tap = YES    scroll = cancel',
+  ].join('\n');
+}
+
+export function workingCard(kind: ActionKind, coin: string): string {
+  return ['PERPGUARD  ○ SENDING', RULE, `${ACTION_LABELS[kind]}  ${coin}`, 'Signing with agent wallet...'].join('\n');
+}
+
+export function resultCard(ok: boolean, message: string): string {
+  return [
+    ok ? 'PERPGUARD  ★ DONE' : 'PERPGUARD  ▲ FAILED',
+    RULE,
+    ...wrap(message, 30),
+    '',
+    '> tap back',
+  ].join('\n');
+}
+
+function wrap(text: string, width: number): string[] {
+  const out: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && (line + ' ' + word).length > width) {
+      out.push(line);
+      line = word;
+    } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) out.push(line);
+  return out.slice(0, 4);
 }
 
 export function emptyCard(snap: Snapshot): string {
