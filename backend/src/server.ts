@@ -100,6 +100,7 @@ if (TG_TOKEN) {
       return latest;
     },
     runAction: (action, coin) => runProtective(action, coin),
+    voiceEnabled: VOICE_ENABLED,
     log: { info: (m) => app.log.info(m), warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o, m) },
   });
   tg.start().then(

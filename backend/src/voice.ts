@@ -2,6 +2,8 @@
 // plus a FIXED phrase grammar. No LLM: the transcript is matched against known phrases only.
 // Voice only *selects* an action; the glasses still require a tap to confirm it.
 
+import { spawn } from 'node:child_process';
+import ffmpegPath from 'ffmpeg-static';
 import { pipeline, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
 import type { ActionKind } from '../../shared/protocol.ts';
 
@@ -82,4 +84,22 @@ function aliases(coin: string): string[] {
     HYPE: ['hype', 'hyper liquid'],
   };
   return map[coin] ?? [];
+}
+
+// ---------- Telegram voice notes (OGG/Opus) -> 16 kHz mono s16le PCM ----------
+
+
+export function decodeToPcm16k(input: Uint8Array): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    if (!ffmpegPath) return reject(new Error('ffmpeg binary not available'));
+    const ff = spawn(ffmpegPath as unknown as string, ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-f', 's16le', '-ac', '1', '-ar', String(SAMPLE_RATE), 'pipe:1']);
+    const out: Buffer[] = [];
+    let err = '';
+    ff.stdout.on('data', (d: Buffer) => out.push(d));
+    ff.stderr.on('data', (d: Buffer) => (err += d));
+    ff.on('error', reject);
+    ff.on('close', (code) => (code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(`ffmpeg exit ${code}: ${err.slice(0, 200)}`))));
+    ff.stdin.on('error', () => {}); // ffmpeg may close stdin early on bad input
+    ff.stdin.end(Buffer.from(input));
+  });
 }

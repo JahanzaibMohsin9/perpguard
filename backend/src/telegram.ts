@@ -9,6 +9,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
 import { ACTION_LABELS, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
+import { decodeToPcm16k, parseCommand, transcribe } from './voice.ts';
+
+const MAX_VOICE_SECONDS = 20;
+const MAX_VOICE_BYTES = 1_000_000;
 
 // ---------- persistent state ----------
 
@@ -77,6 +81,8 @@ export interface BotDeps {
   getSnapshot: () => Promise<Snapshot | null>;
   /** Runs a protective action; undefined when trading is not enabled. */
   runAction?: (action: ActionKind, coin: string) => Promise<{ ok: boolean; message: string }>;
+  /** Local Whisper is loaded: voice notes in linked chats are understood. */
+  voiceEnabled: boolean;
   log: { info: (msg: string) => void; warn: (msg: string) => void; error: (obj: unknown, msg: string) => void };
 }
 
@@ -169,6 +175,7 @@ export class TelegramBot {
   private async handle(u: any) {
     if (u.callback_query) return this.handleCallback(u.callback_query);
     const msg = u.message;
+    if ((msg?.voice || msg?.audio) && this.isLinked(msg.chat.id)) return this.handleVoice(msg);
     if (!msg?.text) return;
     const chatId: number = msg.chat.id;
     const [rawCmd = '', ...args] = String(msg.text).trim().split(/\s+/);
@@ -217,6 +224,59 @@ export class TelegramBot {
         );
       }
     }
+  }
+
+  /** Voice note in a linked chat (private or group): local Whisper + fixed phrases -> confirm buttons. */
+  private async handleVoice(msg: any) {
+    const chatId: number = msg.chat.id;
+    const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+    const media = msg.voice ?? msg.audio;
+    const replyTo = { reply_parameters: { message_id: msg.message_id, allow_sending_without_reply: true } };
+    const say = (html: string, keyboard?: Keyboard) =>
+      this.api('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', ...replyTo, ...(keyboard ? { reply_markup: keyboard } : {}) });
+
+    if (!this.deps.voiceEnabled) return isGroup ? undefined : say('Voice commands are off on this server.');
+    if ((media.duration ?? 0) > MAX_VOICE_SECONDS || (media.file_size ?? 0) > MAX_VOICE_BYTES) {
+      return isGroup ? undefined : say(`Voice note too long. Keep it under ${MAX_VOICE_SECONDS} s.`);
+    }
+
+    void this.api('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+    const file = await this.api<{ file_path: string }>('getFile', { file_id: media.file_id });
+    const res = await undiciFetch(`https://api.telegram.org/file/bot${this.token}/${file.file_path}`, {
+      dispatcher: this.dispatcher,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) throw new Error(`voice download ${res.status}`);
+    const t0 = Date.now();
+    const pcm = await decodeToPcm16k(new Uint8Array(await res.arrayBuffer()));
+    const transcript = await transcribe(pcm);
+
+    const snap = await this.deps.getSnapshot();
+    const positions = snap?.positions ?? [];
+    const parsed = parseCommand(transcript, positions.map((p) => p.coin));
+    const who = esc(msg.from?.first_name ?? 'Someone');
+    this.deps.log.info(`telegram voice from ${msg.from?.id} in ${chatId}: "${transcript}" -> ${JSON.stringify(parsed)} (${Date.now() - t0} ms)`);
+
+    if (!parsed) {
+      // In groups people talk about other things: stay quiet unless it was a command.
+      if (isGroup) return;
+      return say(`🎙 Heard: “${esc(transcript || '(nothing)')}”\nNot a PerpGuard command. Try: <i>close half, close all, break even, two percent stop</i>.`);
+    }
+    // No coin named: use the riskiest position (snapshots are sorted riskiest first).
+    const p = parsed.coin ? positions.find((x) => x.coin === parsed.coin) : positions[0];
+    if (!p) return say(`🎙 Heard: “${esc(transcript)}”\nThere is no open position to act on.`);
+    if (!this.deps.runAction) return say(`🎙 Heard: “${esc(transcript)}”\nTrading is not enabled on this server.`);
+
+    const dist = p.liqDistancePct === null ? '-' : `${fmt(p.liqDistancePct, 1)}%`;
+    return say(
+      `🎙 <b>${who}</b> said: “${esc(transcript)}”\n→ <b>${ACTION_LABELS[parsed.action]} ${esc(p.coin)}</b> (${p.side} ${p.leverage}x, ${dist} from liquidation)\n\nConfirm? Testnet order, reduce-only. Expires in 60 s.`,
+      {
+        inline_keyboard: [[
+          { text: `✅ Yes, ${ACTION_LABELS[parsed.action]}`, callback_data: `y|${parsed.action}|${p.coin}|${Date.now()}` },
+          { text: 'Cancel', callback_data: 'n' },
+        ]],
+      },
+    );
   }
 
   private setPaused(chatId: number, paused: boolean) {
