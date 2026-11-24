@@ -4,14 +4,16 @@
   "description": "PerpGuard: see your Hyperliquid position's liquidation risk on Even Realities G2 and protect it in seconds.",
   "workspaces": [
     "backend",
-    "glasses"
+    "glasses",
+    "web-demo"
   ],
   "scripts": {
     "dev:backend": "npm run dev -w backend",
     "dev:glasses": "npm run dev -w glasses",
     "sim": "evenhub-simulator http://localhost:5173",
-    "typecheck": "npm run typecheck -w backend && npm run typecheck -w glasses",
-    "test": "npm test -w backend"
+    "typecheck": "npm run typecheck -w backend && npm run typecheck -w glasses && npm run typecheck -w web-demo",
+    "test": "npm test -w backend",
+    "dev:demo": "npm run dev -w web-demo"
   },
   "engines": {
     "node": ">=22.12.0"

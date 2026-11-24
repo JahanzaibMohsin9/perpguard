@@ -7,6 +7,9 @@
 Built for *Heads Up: Even Realities Hackathon* (TVM Ventures & Daos Hub), Nov 23–29, 2026.
 Tracks: **02 Crypto & DeFi (Hyperliquid)** + **01 Messaging (Telegram)**.
 
+**▶ Try it in your browser (no install):** https://jahanzaibmohsin9.github.io/perpguard/
+It's the real glasses card on live Hyperliquid data for any address, with a "random live trader" button.
+
 > ⚠️ **Testnet only.** PerpGuard trades on the Hyperliquid **testnet** and never holds user funds. It gives no financial advice. Every action is **protective**: it can reduce or protect a position, but it never opens or increases one.
 
 | Live risk card | Tap menu | Confirm | Receipt | Hold to talk |

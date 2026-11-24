@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PerpGuard · try it</title>
+<meta name="description" content="Try PerpGuard for Even Realities G2 in your browser: live Hyperliquid liquidation risk for any address." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #141821; --line: #262b36; --text: #e8eaf0; --muted: #8b93a6;
+    --green: #39ff5a; --accent: #4f8cff; --warn: #f5a524; --danger: #f2555a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 28px 16px 56px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  h1 { font-size: 22px; margin: 0; }
+  .sub { color: var(--muted); margin: 6px 0 22px; max-width: 720px; }
+  .chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  input, select, button { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 10px 12px; }
+  input { flex: 1 1 320px; min-width: 0; font-family: ui-monospace, monospace; font-size: 13px; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .lens-wrap { container-type: inline-size; width: 100%; }
+  .lens {
+    position: relative; width: 100%; aspect-ratio: 2 / 1; background: #000; border-radius: 18px;
+    border: 1px solid #1f2a1f; box-shadow: 0 0 0 6px #0f1310, 0 20px 60px rgba(0, 0, 0, .5); overflow: hidden;
+  }
+  .lens pre {
+    margin: 0; padding: 2.2cqw 2.6cqw; color: var(--green); white-space: pre; overflow: hidden;
+    font: 500 3.7cqw/1.38 Rajdhani, sans-serif; text-shadow: 0 0 .6cqw rgba(57, 255, 90, .45);
+  }
+  .lens .tag { position: absolute; right: 1.6cqw; bottom: 1.2cqw; font: 600 1.6cqw Inter, sans-serif; color: #2c6b35; letter-spacing: .08em; }
+  .pad { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+  .pad button { padding: 14px 6px; }
+  .pad .hint { display: block; font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+  .status { color: var(--muted); font-size: 13px; min-height: 20px; margin-top: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  @media (max-width: 720px) {
+    .pad { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <h1>PerpGuard · try it</h1>
+    <span class="chip">read-only browser demo</span>
+  </header>
+  <p class="sub">This is the exact card PerpGuard shows on <b>Even Realities G2</b> glasses (576×288), live from Hyperliquid for any address.
+    Use the touchpad buttons (or keys) to walk the read → act flow. Trading is disabled here; the real app sends reduce-only testnet orders.</p>
+
+  <div class="controls">
+    <input id="addr" placeholder="0x… any Hyperliquid address" spellcheck="false" autocomplete="off" />
+    <select id="net" aria-label="Network">
+      <option value="testnet">Testnet</option>
+      <option value="mainnet">Mainnet (read-only)</option>
+    </select>
+    <button class="primary" id="watch">Watch</button>
+    <button id="random" title="Pick someone who just traded on Hyperliquid">🎲 Random live trader</button>
+  </div>
+
+  <div class="lens-wrap">
+    <div class="lens" role="img" aria-label="Glasses display">
+      <pre id="lens">PERPGUARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Loading...</pre>
+      <span class="tag">EVEN G2 · 576×288</span>
+    </div>
+  </div>
+
+  <div class="pad" aria-label="Touchpad and R1 ring">
+    <button data-in="click">Tap<span class="hint">Enter</span></button>
+    <button data-in="up">Scroll ↑<span class="hint">↑</span></button>
+    <button data-in="down">Scroll ↓<span class="hint">↓</span></button>
+    <button data-in="hold">Hold (voice)<span class="hint">Space</span></button>
+    <button data-in="double">Double tap<span class="hint">Esc</span></button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <section class="grid">
+    <div class="card"><h3>Read at a glance</h3><p>Distance to liquidation, a safety bar, and <b>time to liquidation at the current pace</b> (appears after ~45 s of live data while price trends toward liquidation).</p></div>
+    <div class="card"><h3>Act in seconds</h3><p>Tap or say “close half”, confirm with one tap. Real app: a reduce-only order through an agent wallet that can never withdraw.</p></div>
+    <div class="card"><h3>Telegram + Guardian</h3><p>Alerts, receipts, group voice notes and a Mini App. Guardian closes 25% and sets a stop before liquidation if nobody answers a DANGER alert.</p></div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/JahanzaibMohsin9/perpguard">GitHub repo</a> ·
+    Built for the Heads Up: Even Realities Hackathon · Data: Hyperliquid public API, straight from your browser.
+  </footer>
+</main>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
