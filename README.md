@@ -124,6 +124,19 @@ The agent key can trade but can never withdraw. Even so, never commit `.env`.
 - **Display.** The G2 text card uses only glyphs known to render on the display (no emoji).
 - **Real glasses.** Built and tested in the Even Hub simulator. On real glasses, set the backend's public origin in `glasses/app.json` → `permissions[network].whitelist`, then package with `npm run pack -w glasses`.
 
+## Feature requests (for the teams behind the APIs we used)
+
+1. **Hyperliquid: scoped API wallets.** Add an agent permission for **reduce-only orders**. Today an API wallet can do any trade. A "protect-only" key would let safety tools like PerpGuard prove they can't open or increase positions, which is safer for users and easier to trust.
+2. **Hyperliquid: dependable testnet funding for developers.**
+   - The testnet faucet requires a mainnet deposit first.
+   - The Circle CCTP → HyperCore testnet forwarder often never credits deposits: the funds reach the deposit wallet and stop there.
+   - A developer faucet, or a reliable forwarder, would remove the biggest blocker for new builders.
+3. **Even Hub: glasses notifications while the app is closed.** Let a backend (or a bound Telegram bot) push a short notice to the HUD. Then a liquidation alert can reach the wearer without the app in the foreground.
+4. **Even Hub: built-in speech-to-text, and better simulator audio testing.**
+   - A first-party transcription or short-intent API would spare every app from streaming raw PCM to its own server.
+   - The simulator automation API should accept a WAV file as mic input, so voice flows can be tested automatically.
+5. **Telegram Bot API: voice-message transcription for bots.** Telegram already transcribes voice notes for Premium users. Exposing that to bots would let voice-driven bots run without their own speech-to-text stack.
+
 ## What existed before the hackathon
 
 Nothing. This repository was created on **Nov 23, 2026**, and everything in it was written during build week.
