@@ -82,6 +82,12 @@ export interface BotDeps {
   getSnapshot: () => Promise<Snapshot | null>;
   /** Runs a protective action; undefined when trading is not enabled. */
   runAction?: (action: ActionKind, coin: string) => Promise<{ ok: boolean; message: string }>;
+  /** Guardian mode controls; undefined when trading is not enabled. */
+  guardian?: {
+    settings: () => { enabled: boolean; graceSec: number; closePct: number };
+    update: (patch: { enabled?: boolean; graceSec?: number; closePct?: number }) => void;
+    cancel: (coin: string) => void;
+  };
   /** Local Whisper is loaded: voice notes in linked chats are understood. */
   voiceEnabled: boolean;
   log: { info: (msg: string) => void; warn: (msg: string) => void; error: (obj: unknown, msg: string) => void };
@@ -225,6 +231,29 @@ export class TelegramBot {
       case '/resume':
         this.setPaused(chatId, false);
         return this.send(chatId, '▶️ Alerts resumed.');
+      case '/guardian': {
+        const g = this.deps.guardian;
+        if (!g) return this.send(chatId, 'Guardian needs trading to be enabled on the server.');
+        const [mode, grace, pct] = args;
+        if (mode === 'on' || mode === 'off') {
+          g.update({
+            enabled: mode === 'on',
+            ...(grace && Number(grace) > 0 ? { graceSec: Number(grace) } : {}),
+            ...(pct && Number(pct) > 0 ? { closePct: Number(pct) } : {}),
+          });
+        } else if (mode) {
+          return this.send(chatId, 'Usage: <code>/guardian on 60 25</code> (seconds to wait, % to close) or <code>/guardian off</code>');
+        }
+        const s = g.settings();
+        return this.send(
+          chatId,
+          s.enabled
+            ? `🛡 <b>Guardian is ON.</b>
+If a position hits DANGER and nobody acts within <b>${s.graceSec} s</b>, PerpGuard closes <b>${s.closePct}%</b> and places a safety stop just before the liquidation price. Reduce-only.
+Turn off: <code>/guardian off</code>`
+            : '🛡 Guardian is <b>OFF</b>.\nTurn on: <code>/guardian on</code> (default: wait 60 s, close 25%, safety stop before liquidation).',
+        );
+      }
       case '/alerts': {
         const [w, d] = args.map(Number);
         if (w !== undefined && d !== undefined && w > d && d > 0 && w <= 50) {
@@ -326,6 +355,11 @@ export class TelegramBot {
         ...(keyboard ? { reply_markup: keyboard } : {}),
       }).catch(() => {});
 
+    if (kind === 'g') {
+      this.deps.guardian?.cancel(action as unknown as string);
+      await answer('Guardian cancelled');
+      return edit('🛡 Guardian cancelled for this alert. Nothing was sent.');
+    }
     if (kind === 'n') {
       await answer('Cancelled');
       return edit('❎ Cancelled. Nothing was sent.');
@@ -380,6 +414,34 @@ export class TelegramBot {
       if (m && ['creator', 'administrator', 'member'].includes(m.status)) return { id, name };
     }
     return null;
+  }
+
+  // ---------- Guardian notifications ----------
+
+  thresholds() {
+    return { warnPct: this.state.warnPct, dangerPct: this.state.dangerPct };
+  }
+
+  guardianArmed(coin: string, graceSec: number, closePct: number) {
+    return this.broadcast(
+      `🛡 <b>Guardian armed for ${esc(coin)}</b>
+If nobody acts within <b>${graceSec} s</b>, PerpGuard will close <b>${closePct}%</b> and set a safety stop before liquidation.`,
+      { inline_keyboard: [[{ text: 'Cancel Guardian', callback_data: `g|${coin}` }]] },
+      true,
+    );
+  }
+
+  guardianCancelled(coin: string, reason: string) {
+    return this.broadcast(`🛡 Guardian stood down for ${esc(coin)}: ${esc(reason)}.`, undefined, true);
+  }
+
+  guardianActed(coin: string, ok: boolean, message: string) {
+    return this.broadcast(
+      `${ok ? '🛡' : '❌'} <b>Guardian ${ok ? 'protected' : 'could not protect'} ${esc(coin)}</b> (no response in time)
+${esc(message)}`,
+      undefined,
+      true,
+    );
   }
 
   // ---------- outgoing: alerts and receipts ----------
@@ -505,6 +567,7 @@ const HELP = [
   '/status  positions, distance to liquidation, action buttons',
   '/alerts  view or change alert levels',
   '/pause  /resume  mute alerts in this chat',
+  '/guardian  auto-protect if nobody answers a DANGER alert',
   '',
   'Actions are protective only (close 50%, close all, break-even stop, 2% stop) and always ask for confirmation.',
   'PerpGuard never asks for your seed phrase or private key.',

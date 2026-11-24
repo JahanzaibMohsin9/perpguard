@@ -46,7 +46,7 @@ type Mode =
   | { kind: 'thinking'; requestId: string }
   | { kind: 'notUnderstood'; transcript: string }
   | { kind: 'working'; coin: string; action: ActionKind; requestId: string }
-  | { kind: 'result'; ok: boolean; message: string };
+  | { kind: 'result'; ok: boolean; message: string; title?: string };
 let mode: Mode = { kind: 'card' };
 const CONFIRM_TIMEOUT_MS = 10_000; // a stale confirm screen must never fire later
 let confirmTimer: ReturnType<typeof setTimeout> | undefined;
@@ -117,7 +117,7 @@ function render() {
     case 'working':
       return void show(workingCard(mode.action, mode.coin));
     case 'result':
-      return void show(resultCard(mode.ok, mode.message));
+      return void show(resultCard(mode.ok, mode.message, mode.title));
     case 'listening':
       return void show(listeningCard((Date.now() - mode.started) / 1000));
     case 'thinking':
@@ -200,6 +200,11 @@ function connect() {
     if (msg.type === 'snapshot') {
       lastSnapshot = msg;
       renderSnapshot();
+    } else if (msg.type === 'notice') {
+      // Guardian acted on its own: show it unless the wearer is in the middle of something.
+      if (mode.kind === 'card' || mode.kind === 'result' || mode.kind === 'notUnderstood') {
+        setMode({ kind: 'result', ok: msg.ok, message: msg.message, title: msg.title });
+      }
     } else if (msg.type === 'voiceResult') {
       if (mode.kind === 'thinking' && mode.requestId === msg.requestId) {
         const cmd = msg.command;

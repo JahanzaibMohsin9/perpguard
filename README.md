@@ -21,9 +21,19 @@ Leveraged traders get liquidated while they are away from their screens: walking
 
 | Surface | Features |
 |---|---|
-| **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
-| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/pause`, `/resume`. **Receipts** for every action taken from the glasses. **Voice notes** in private chats and in **group chats** (a shared trading desk): the bot transcribes them and replies with confirm buttons. |
+| **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, **time to liquidation at the current pace**, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
+| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance and **how many seconds after the alert** the position was protected. **Voice notes** in private chats and in **group chats** (a shared trading desk): the bot transcribes them and replies with confirm buttons. |
 | **Telegram Mini App** | Live dashboard inside Telegram with the same protective buttons, and **spectator mode** to watch any address read-only. |
+
+### 🛡 Guardian mode (opt-in)
+Guardian is a dead man's switch for the moments you **can't** answer: asleep, driving or in a meeting.
+1. When a position enters DANGER, Guardian arms a countdown (60 s by default). It shows on the glasses as `★ GUARDIAN closes 25% in 42s`, and in Telegram with a **Cancel** button.
+2. If **nobody acts** before the countdown runs out, PerpGuard protects the position itself:
+   - it **closes 25%** (reduce-only), and
+   - it places a **safety stop just before the liquidation price**, so the position exits before the exchange liquidates it (an existing tighter stop is kept).
+3. Any action you take (tap, voice, Telegram or Mini App), or the risk easing, cancels the countdown.
+
+It acts at most once per position every 10 minutes. Turn it on in Telegram with `/guardian on` (or `/guardian on 60 25`), and off with `/guardian off`.
 
 The four protective actions are **Close 50%**, **Close all**, **Stop at break-even** (refused when it would trigger immediately) and **Stop 2% away**. All four are reduce-only orders. A new stop replaces the old one, so stops never pile up.
 

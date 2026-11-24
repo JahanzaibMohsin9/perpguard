@@ -31,6 +31,14 @@ function pace(minutes: number | null): string {
   return `~${(minutes / 60).toFixed(1)} h to liq`;
 }
 
+/** "★ GUARDIAN acts in 42s" while a countdown runs for this coin. */
+function guardianLine(snap: Snapshot, coin: string): string {
+  const g = snap.guardian;
+  const armed = g?.armed.find((a) => a.coin === coin);
+  if (armed) return `★ GUARDIAN closes ${g!.closePct}% in ${armed.secondsLeft}s`;
+  return g?.enabled ? '○ guardian on' : '';
+}
+
 function riskLabel(distancePct: number | null): string {
   if (distancePct === null) return 'SAFE';
   if (distancePct < 3) return '▲ DANGER';
@@ -52,7 +60,7 @@ export function positionCard(snap: Snapshot, p: PositionView, index: number): st
     `Mark ${fmtPx(p.markPx)}   Liq ${fmtPx(p.liqPx)}`,
     `LIQ ${dist}  ${riskLabel(p.liqDistancePct)}`,
     `${safetyBar(p.liqDistancePct)}  ${pace(p.minutesToLiq)}`,
-    '',
+    guardianLine(snap, p.coin),
     hints(snap),
   ].join('\n');
 }
@@ -102,17 +110,17 @@ export function workingCard(kind: ActionKind, coin: string): string {
   return ['PERPGUARD  ○ SENDING', RULE, `${ACTION_LABELS[kind]}  ${coin}`, 'Signing with agent wallet...'].join('\n');
 }
 
-export function resultCard(ok: boolean, message: string): string {
+export function resultCard(ok: boolean, message: string, title?: string): string {
   return [
-    ok ? 'PERPGUARD  ★ DONE' : 'PERPGUARD  ▲ FAILED',
+    title ? `PERPGUARD  ${ok ? '★' : '▲'} ${title}` : ok ? 'PERPGUARD  ★ DONE' : 'PERPGUARD  ▲ FAILED',
     RULE,
-    ...wrap(message, 30),
+    ...wrap(message, 30, 5),
     '',
     '> tap back',
   ].join('\n');
 }
 
-function wrap(text: string, width: number): string[] {
+function wrap(text: string, width: number, maxLines = 4): string[] {
   const out: string[] = [];
   let line = '';
   for (const word of text.split(/\s+/)) {
@@ -122,7 +130,7 @@ function wrap(text: string, width: number): string[] {
     } else line = line ? `${line} ${word}` : word;
   }
   if (line) out.push(line);
-  return out.slice(0, 4);
+  return out.slice(0, maxLines);
 }
 
 export function listeningCard(seconds: number): string {

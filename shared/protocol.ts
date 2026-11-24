@@ -23,6 +23,7 @@ export interface Snapshot {
   accountValue: number;
   positions: PositionView[];
   canTrade: boolean; // an approved agent wallet is linked for this address
+  guardian?: { enabled: boolean; graceSec: number; closePct: number; armed: Array<{ coin: string; secondsLeft: number }> };
   ts: number;
 }
 
@@ -64,7 +65,15 @@ export interface SessionMessage {
   master: string | null; // the account PerpGuard can protect (only shown to authed sessions)
 }
 
-export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage;
+/** Something happened without a request from this client (e.g. Guardian acted). */
+export interface NoticeMessage {
+  type: 'notice';
+  ok: boolean;
+  title: string; // short, glasses-safe
+  message: string; // short, glasses-safe
+}
+
+export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage | NoticeMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address

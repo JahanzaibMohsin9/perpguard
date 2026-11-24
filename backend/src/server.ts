@@ -7,6 +7,7 @@ import { agentKeyFromEnv, Trader } from './exchange.ts';
 import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
 import { readFile } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
+import { Guardian } from './guardian.ts';
 import { TelegramBot } from './telegram.ts';
 import { startQuickTunnel } from './tunnel.ts';
 import { loadWhisper, parseCommand, transcribe } from './voice.ts';
@@ -63,6 +64,7 @@ const MAX_VOICE_BYTES = 16_000 * 2 * 10; // 10 s of 16 kHz s16le
 let actionBusy = false;
 async function runProtective(action: ActionKind, coin: string): Promise<{ ok: boolean; message: string }> {
   if (!trader) return { ok: false, message: 'Trading not linked for this wallet.' };
+  guardian?.userActed(coin); // a person is handling it: Guardian stands down
   if (actionBusy) return { ok: false, message: 'Another action is still running.' };
   actionBusy = true;
   try {
@@ -73,6 +75,21 @@ async function runProtective(action: ActionKind, coin: string): Promise<{ ok: bo
   } catch (err) {
     app.log.error({ err, action }, 'action failed');
     return { ok: false, message: 'Action failed. Check the server log.' };
+  } finally {
+    actionBusy = false;
+    void monitorTick();
+  }
+}
+
+/** Guardian's own action (same one-at-a-time lock as people's actions). */
+async function runGuard(coin: string, fraction: number): Promise<{ ok: boolean; message: string }> {
+  if (!trader) return { ok: false, message: 'Trading not linked.' };
+  if (actionBusy) return { ok: false, message: 'Another action was running; Guardian skipped.' };
+  actionBusy = true;
+  try {
+    const result = await trader.guard(coin, fraction);
+    app.log.info({ guardian: true, coin, ok: result.ok, detail: result.detail }, 'action');
+    return result.ok ? { ok: true, message: result.message + (await receiptExtras(coin)) } : result;
   } finally {
     actionBusy = false;
     void monitorTick();
@@ -106,13 +123,40 @@ async function monitorTick() {
   if (!isAddress(DEFAULT_ADDRESS) || monitorInFlight) return;
   monitorInFlight = true;
   try {
-    latest = { ...(await fetchSnapshot(NETWORK, DEFAULT_ADDRESS)), canTrade: Boolean(trader) };
+    latest = { ...(await fetchSnapshot(NETWORK, DEFAULT_ADDRESS)), canTrade: Boolean(trader), guardian: guardianInfo() };
     await bot?.onSnapshot(latest);
+    guardian?.onSnapshot(latest);
   } catch (err) {
     app.log.warn(`monitor: ${(err as Error).message}`);
   } finally {
     monitorInFlight = false;
   }
+}
+
+// ---------- Guardian (opt-in dead man's switch) ----------
+const sockets = new Set<WebSocket>();
+function broadcastNotice(ok: boolean, title: string, message: string) {
+  for (const s of sockets) send(s, { type: 'notice', ok, title, message });
+}
+const guardian: Guardian | null = trader
+  ? new Guardian({
+      warnPct: () => bot?.thresholds().warnPct ?? 8,
+      dangerPct: () => bot?.thresholds().dangerPct ?? 3,
+      act: (coin, fraction) => runGuard(coin, fraction),
+      onArmed: (coin, s) => void bot?.guardianArmed(coin, s.graceSec, s.closePct),
+      onCancelled: (coin, reason) => void bot?.guardianCancelled(coin, reason),
+      onActed: (coin, result) => {
+        void bot?.guardianActed(coin, result.ok, result.message);
+        broadcastNotice(result.ok, result.ok ? 'GUARDIAN ACTED' : 'GUARDIAN FAILED', result.message);
+      },
+      log: (m) => app.log.info(m),
+    })
+  : null;
+function guardianInfo(): Snapshot['guardian'] {
+  if (!guardian) return undefined;
+  const { enabled, graceSec, closePct } = guardian.settings;
+  const armed = guardian.armedList().map((a) => ({ coin: a.coin, secondsLeft: Math.max(0, Math.round((a.deadline - Date.now()) / 1000)) }));
+  return { enabled, graceSec, closePct, armed };
 }
 
 let bot: TelegramBot | null = null;
@@ -124,6 +168,13 @@ if (TG_TOKEN) {
       return latest;
     },
     runAction: (action, coin) => runProtective(action, coin),
+    guardian: guardian
+      ? {
+          settings: () => guardian.settings,
+          update: (patch) => guardian.update(patch),
+          cancel: (coin) => guardian.cancel(coin, 'cancelled from Telegram'),
+        }
+      : undefined,
     voiceEnabled: VOICE_ENABLED,
     log: { info: (m) => app.log.info(m), warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o, m) },
   });
@@ -188,7 +239,7 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     if (inFlight) return;
     inFlight = true;
     try {
-      send(socket, { ...(await fetchSnapshot(NETWORK, address)), canTrade: canTrade() });
+      send(socket, { ...(await fetchSnapshot(NETWORK, address)), canTrade: canTrade(), guardian: canTrade() ? guardianInfo() : undefined });
     } catch (err) {
       req.log.warn({ err }, 'snapshot failed');
       send(socket, { type: 'status', level: 'error', message: 'Hyperliquid unreachable. Retrying.' });
@@ -270,7 +321,11 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     }
   });
 
-  socket.on('close', () => clearInterval(timer));
+  if (local || authed) sockets.add(socket);
+  socket.on('close', () => {
+    clearInterval(timer);
+    sockets.delete(socket);
+  });
   sendSession();
   restart();
 });

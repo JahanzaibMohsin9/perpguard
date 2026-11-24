@@ -231,6 +231,71 @@ export class Trader {
       detail: res,
     };
   }
+
+  /**
+   * Guardian action (reduce-only, two steps):
+   *  1. close `fraction` of the position, and
+   *  2. make sure a stop sits between mark and liquidation (at `stopShare` of the gap above liq),
+   *     so the position exits before the exchange liquidates it. An existing tighter stop is kept.
+   */
+  async guard(coin: string, fraction: number, stopShare = 0.3): Promise<ActionResult> {
+    const state = await info<{ assetPositions: Array<{ position: { coin: string; szi: string; liquidationPx: string | null } }> }>(
+      this.network,
+      { type: 'clearinghouseState', user: this.master },
+    );
+    const p = state.assetPositions.find((x) => x.position.coin === coin)?.position;
+    if (!p || Number(p.szi) === 0) return { ok: false, message: `No open ${coin} position.` };
+    const { index: a, szDecimals } = await assetMeta(this.network, coin);
+    const isLong = Number(p.szi) > 0;
+    const absSz = Math.abs(Number(p.szi));
+    const mark = await markPx(this.network, coin);
+    const parts: string[] = [];
+
+    // 1. partial close
+    let sz = roundSz(absSz * fraction, szDecimals);
+    if (sz <= 0) sz = absSz;
+    const px = roundPx(isLong ? mark * (1 - SLIPPAGE) : mark * (1 + SLIPPAGE), szDecimals);
+    const closeRes = await exchange(this.agent, this.network, {
+      type: 'order',
+      orders: [{ a, b: !isLong, p: toWire(px), s: toWire(sz), r: true, t: { limit: { tif: 'Ioc' } } }],
+      grouping: 'na',
+    });
+    const closed = firstStatus(closeRes);
+    if (!closed.ok) return { ok: false, message: `Rejected: ${closed.text}`, detail: closeRes };
+    parts.push(`Closed ${Math.round(fraction * 100)}%: ${coin} ${closed.text}`);
+
+    // 2. stop before liquidation (for the remaining size)
+    const liq = p.liquidationPx !== null ? Number(p.liquidationPx) : null;
+    const remaining = roundSz(absSz - sz, szDecimals);
+    if (liq && liq > 0 && remaining > 0) {
+      const trigger = roundPx(isLong ? liq + (mark - liq) * stopShare : liq - (liq - mark) * stopShare, szDecimals);
+      const orders = await info<Array<{ coin: string; isTrigger: boolean; reduceOnly: boolean; orderType: string; triggerPx: string }>>(
+        this.network,
+        { type: 'frontendOpenOrders', user: this.master },
+      );
+      const tighter = orders.some(
+        (o) => o.coin === coin && o.isTrigger && o.reduceOnly && /stop/i.test(o.orderType) &&
+          (isLong ? Number(o.triggerPx) >= trigger : Number(o.triggerPx) <= trigger),
+      );
+      if (tighter) {
+        parts.push('existing stop kept');
+      } else {
+        await cancelExistingStops(this.agent, this.network, this.master, coin, a);
+        const limit = roundPx(isLong ? trigger * (1 - SLIPPAGE) : trigger * (1 + SLIPPAGE), szDecimals);
+        const stopRes = await exchange(this.agent, this.network, {
+          type: 'order',
+          orders: [{
+            a, b: !isLong, p: toWire(limit), s: toWire(remaining), r: true,
+            t: { trigger: { isMarket: true, triggerPx: toWire(trigger), tpsl: 'sl' } },
+          }],
+          grouping: 'na',
+        });
+        const st = firstStatus(stopRes);
+        parts.push(st.ok ? `safety stop at ${toWire(trigger)} (before liq ${toWire(roundPx(liq, szDecimals))})` : `stop rejected: ${st.text}`);
+      }
+    }
+    return { ok: true, message: parts.join(' · '), detail: closeRes };
+  }
 }
 
 export function agentKeyFromEnv(): Hex | null {
