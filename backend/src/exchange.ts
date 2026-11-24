@@ -294,7 +294,7 @@ export class Trader {
         parts.push(st.ok ? `safety stop at ${toWire(trigger)} (before liq ${toWire(roundPx(liq, szDecimals))})` : `stop rejected: ${st.text}`);
       }
     }
-    return { ok: true, message: parts.join(' · '), detail: closeRes };
+    return { ok: true, message: parts.join('; '), detail: closeRes };
   }
 }
 

@@ -73,12 +73,26 @@ export interface NoticeMessage {
   message: string; // short, glasses-safe
 }
 
-export type ServerMessage = Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage | NoticeMessage;
+/** Pairing for remote glasses: show the code, then store the token. */
+export interface PairCodeMessage {
+  type: 'pairCode';
+  code: string;
+  botUsername: string | null;
+  expiresInSec: number;
+}
+export interface PairedMessage {
+  type: 'paired';
+  token: string;
+  pairedBy: string;
+}
+
+export type ServerMessage = PairCodeMessage | PairedMessage | Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage | NoticeMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
   | { type: 'refresh' }
-  | { type: 'auth'; initData: string } // Telegram Mini App launch data (signed by Telegram)
+  | { type: 'auth'; initData?: string; deviceToken?: string } // Mini App launch data, or a paired device's token
+  | { type: 'pairRequest' } // remote glasses ask for a pairing code
   | { type: 'action'; requestId: string; action: ActionKind; coin: string; heard?: string } // heard = voice transcript
   // Push-to-talk audio: base64 of 16 kHz mono s16le PCM. screenCoin = position shown on the glasses.
   | { type: 'voice'; requestId: string; pcm: string; screenCoin: string | null; coins: string[] };

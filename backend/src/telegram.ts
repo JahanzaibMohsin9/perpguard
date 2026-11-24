@@ -83,6 +83,12 @@ export interface BotDeps {
   /** Runs a protective action; undefined when trading is not enabled. */
   runAction?: (action: ActionKind, coin: string) => Promise<{ ok: boolean; message: string }>;
   /** Guardian mode controls; undefined when trading is not enabled. */
+  /** Glasses pairing (codes shown on remote glasses). */
+  pairing?: {
+    complete: (code: string, pairedBy: string) => boolean;
+    list: () => Array<{ id: string; pairedBy: string; createdAt: number }>;
+    revokeAll: () => number;
+  };
   guardian?: {
     settings: () => { enabled: boolean; graceSec: number; closePct: number };
     update: (patch: { enabled?: boolean; graceSec?: number; closePct?: number }) => void;
@@ -97,7 +103,7 @@ export class TelegramBot {
   private state = loadState();
   private dispatcher: Dispatcher | undefined;
   private offset = 0;
-  private username = '';
+  username = ''; // the bot's @username, set by start()
   private lastRisk = new Map<string, Risk>(); // coin -> last alerted risk level
   private primed = false; // false until the first snapshot after startup has been seen
   private alertTimes = new Map<string, number>(); // coin -> when the last WARNING/DANGER alert went out
@@ -231,6 +237,26 @@ export class TelegramBot {
       case '/resume':
         this.setPaused(chatId, false);
         return this.send(chatId, '▶️ Alerts resumed.');
+      case '/pair': {
+        if (!this.deps.pairing) return this.send(chatId, 'Pairing is not available on this server.');
+        if (msg.chat.type !== 'private') return this.send(chatId, 'For safety, pair glasses from your private chat with me.');
+        const code = args.join('');
+        if (!/^\d{6}$/.test(code)) return this.send(chatId, 'Send the 6-digit code shown on your glasses, like <code>/pair 482913</code>.');
+        const ok = this.deps.pairing.complete(code, msg.from?.first_name ?? 'Telegram user');
+        return this.send(chatId, ok
+          ? '👓 <b>Glasses paired.</b> They can now protect your positions. Revoke any time with /unpair.'
+          : '❌ That code is wrong or expired. Codes last 5 minutes; reopen PerpGuard on the glasses for a new one.');
+      }
+      case '/devices': {
+        const list = this.deps.pairing?.list() ?? [];
+        return this.send(chatId, list.length
+          ? `👓 <b>Paired glasses (${list.length})</b>\n` + list.map((d) => `• ${esc(d.id)}, paired by ${esc(d.pairedBy)} on ${new Date(d.createdAt).toISOString().slice(0, 10)}`).join('\n') + '\nRevoke all: /unpair'
+          : 'No paired glasses. Glasses on this computer do not need pairing.');
+      }
+      case '/unpair': {
+        const n = this.deps.pairing?.revokeAll() ?? 0;
+        return this.send(chatId, `🔒 Revoked ${n} paired device${n === 1 ? '' : 's'}. They are read-only until paired again.`);
+      }
       case '/guardian': {
         const g = this.deps.guardian;
         if (!g) return this.send(chatId, 'Guardian needs trading to be enabled on the server.');
@@ -568,6 +594,7 @@ const HELP = [
   '/alerts  view or change alert levels',
   '/pause  /resume  mute alerts in this chat',
   '/guardian  auto-protect if nobody answers a DANGER alert',
+  '/pair 123456  pair glasses showing a code  (/devices, /unpair)',
   '',
   'Actions are protective only (close 50%, close all, break-even stop, 2% stop) and always ask for confirmation.',
   'PerpGuard never asks for your seed phrase or private key.',

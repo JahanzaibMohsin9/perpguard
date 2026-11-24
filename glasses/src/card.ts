@@ -161,6 +161,20 @@ export function notUnderstoodCard(transcript: string): string {
   ].join('\n');
 }
 
+/** Shown on glasses that reach the server remotely and are not paired yet. */
+export function pairingCard(code: string, botUsername: string | null, minutesLeft: number): string {
+  return [
+    'PERPGUARD  ● PAIR THIS DEVICE',
+    RULE,
+    'On Telegram, send this to',
+    botUsername ? `@${botUsername}:` : 'the PerpGuard bot:',
+    `  /pair ${code.slice(0, 3)} ${code.slice(3)}`,
+    `Code expires in ${Math.max(1, Math.ceil(minutesLeft))} min.`,
+    '',
+    '> tap new code   2x tap exit',
+  ].join('\n');
+}
+
 export function emptyCard(snap: Snapshot): string {
   return [
     `PERPGUARD  ○ ${snap.network}`,

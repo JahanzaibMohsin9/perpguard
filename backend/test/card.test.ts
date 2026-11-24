@@ -7,6 +7,7 @@ import {
   listeningCard,
   menuCard,
   notUnderstoodCard,
+  pairingCard,
   positionCard,
   resultCard,
   safetyBar,
@@ -31,6 +32,8 @@ const cards: Record<string, string> = {
   listening: listeningCard(2.5),
   notUnderstood: notUnderstoodCard('Those 500%'),
   result: resultCard(true, 'Closed 50%: ETH filled 0.4827 @ 1678.2'),
+  guardian: resultCard(true, 'Closed 25%: ETH filled 0.2414 @ 1665.42; existing stop kept; liq now 1.8% away; protected 61.2 s after the alert', 'GUARDIAN ACTED'),
+  pairing: pairingCard('482913', 'PerpGuard2Bot', 4.2),
 };
 
 test('cards use only glyphs the G2 can render (no emoji)', () => {

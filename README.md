@@ -53,6 +53,7 @@ The four protective actions are **Close 50%**, **Close all**, **Stop at break-ev
   - The glasses may trade only through a connection from the same machine.
   - Remote clients (the Mini App, via the tunnel) start **read-only**. They can trade only after sending Telegram `initData` that passes **HMAC verification** and belongs to a linked chat or linked-group member.
   - Linking a Telegram chat requires a private pairing link.
+  - **Glasses that are not on the server's machine** (the packaged app on a phone) start read-only and show a **6-digit pairing code**. A linked user sends `/pair 482913` to the bot from a private chat, and the glasses receive a device token kept in the glasses' storage. Only a SHA-256 hash of each token is stored on the server. `/devices` lists the paired glasses, and `/unpair` revokes them all.
 - **One action at a time** across glasses, bot and Mini App.
 
 ## How it works

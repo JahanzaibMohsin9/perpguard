@@ -12,6 +12,7 @@ import {
 } from '@evenrealities/even_hub_sdk';
 import type { ActionKind, ClientMessage, PositionView, ServerMessage, Snapshot } from '../../shared/protocol.ts';
 import {
+  pairingCard,
   confirmCard,
   emptyCard,
   listeningCard,
@@ -45,6 +46,7 @@ type Mode =
   | { kind: 'listening'; started: number }
   | { kind: 'thinking'; requestId: string }
   | { kind: 'notUnderstood'; transcript: string }
+  | { kind: 'pairing'; code: string; botUsername: string | null; expires: number }
   | { kind: 'working'; coin: string; action: ActionKind; requestId: string }
   | { kind: 'result'; ok: boolean; message: string; title?: string };
 let mode: Mode = { kind: 'card' };
@@ -124,6 +126,33 @@ function render() {
       return void show(thinkingCard());
     case 'notUnderstood':
       return void show(notUnderstoodCard(mode.transcript));
+    case 'pairing':
+      return void show(pairingCard(mode.code, mode.botUsername, (mode.expires - Date.now()) / 60_000));
+  }
+}
+
+// ---------- pairing (glasses that reach the server remotely, e.g. the packaged app) ----------
+
+const TOKEN_KEY = 'perpguard_device_token';
+let deviceToken = '';
+let tokenTried = false;
+
+async function loadToken(): Promise<string> {
+  try {
+    if (bridge) return (await bridge.getLocalStorage(TOKEN_KEY)) ?? '';
+    return localStorage.getItem(TOKEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+async function saveToken(token: string) {
+  deviceToken = token;
+  try {
+    if (bridge) await bridge.setLocalStorage(TOKEN_KEY, token);
+    else localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // the device can pair again next time
   }
 }
 
@@ -197,7 +226,23 @@ function connect() {
   };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(String(ev.data)) as ServerMessage;
-    if (msg.type === 'snapshot') {
+    if (msg.type === 'session') {
+      if (msg.authed) {
+        if (mode.kind === 'pairing') setMode({ kind: 'card' });
+      } else if (deviceToken && !tokenTried) {
+        tokenTried = true;
+        sendToServer({ type: 'auth', deviceToken });
+      } else {
+        if (tokenTried && deviceToken) void saveToken(''); // revoked or unknown: pair again
+        sendToServer({ type: 'pairRequest' });
+      }
+    } else if (msg.type === 'pairCode') {
+      setMode({ kind: 'pairing', code: msg.code, botUsername: msg.botUsername, expires: Date.now() + msg.expiresInSec * 1000 });
+    } else if (msg.type === 'paired') {
+      void saveToken(msg.token);
+      tokenTried = true;
+      setMode({ kind: 'result', ok: true, title: 'PAIRED', message: `Paired by ${msg.pairedBy}. These glasses can now protect your positions.` });
+    } else if (msg.type === 'snapshot') {
       lastSnapshot = msg;
       renderSnapshot();
     } else if (msg.type === 'notice') {
@@ -222,6 +267,7 @@ function connect() {
   };
   ws.onclose = () => {
     ws = null;
+    tokenTried = false;
     if (mode.kind === 'listening') {
       clearInterval(listenTicker);
       void bridge?.audioControl(false).catch(() => false);
@@ -256,7 +302,7 @@ async function onEvent(event: EvenHubEvent) {
   if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     // Even Hub review rule: double tap on the root page opens the system exit dialog.
     // Inside sub-screens it acts as "back" instead.
-    if (mode.kind === 'card') await bridge?.shutDownPageContainer(1);
+    if (mode.kind === 'card' || mode.kind === 'pairing') await bridge?.shutDownPageContainer(1);
     else if (mode.kind === 'listening') {
       clearInterval(listenTicker);
       audioChunks = [];
@@ -322,6 +368,9 @@ async function onEvent(event: EvenHubEvent) {
     case 'notUnderstood':
       if (isClick) setMode({ kind: 'card' });
       break;
+    case 'pairing':
+      if (isClick) sendToServer({ type: 'pairRequest' }); // fresh code
+      break;
   }
 }
 
@@ -367,4 +416,5 @@ async function startGlasses(): Promise<void> {
 }
 
 await startGlasses();
+deviceToken = await loadToken();
 connect();

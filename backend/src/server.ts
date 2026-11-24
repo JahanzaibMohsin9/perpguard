@@ -8,6 +8,7 @@ import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
 import { readFile } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
 import { Guardian } from './guardian.ts';
+import { CODE_TTL_MS, Pairing } from './pairing.ts';
 import { TelegramBot } from './telegram.ts';
 import { startQuickTunnel } from './tunnel.ts';
 import { loadWhisper, parseCommand, transcribe } from './voice.ts';
@@ -103,15 +104,15 @@ async function receiptExtras(coin: string): Promise<string> {
     if (isAddress(DEFAULT_ADDRESS)) {
       const snap = await fetchSnapshot(NETWORK, DEFAULT_ADDRESS);
       const p = snap.positions.find((x) => x.coin === coin);
-      if (!p) extra += ' · position closed';
-      else if (p.liqDistancePct !== null) extra += ` · liq now ${p.liqDistancePct >= 100 ? '>99' : p.liqDistancePct.toFixed(1)}% away`;
+      if (!p) extra += '; position closed';
+      else if (p.liqDistancePct !== null) extra += `; liq now ${p.liqDistancePct >= 100 ? '>99' : p.liqDistancePct.toFixed(1)}% away`;
     }
   } catch {
     // receipt still goes out without the extra line
   }
   const alertedAt = bot?.lastAlertAt(coin);
   if (alertedAt && Date.now() - alertedAt < 15 * 60_000) {
-    extra += ` · protected ${((Date.now() - alertedAt) / 1000).toFixed(1)} s after the alert`;
+    extra += `; protected ${((Date.now() - alertedAt) / 1000).toFixed(1)} s after the alert`;
   }
   return extra;
 }
@@ -159,6 +160,8 @@ function guardianInfo(): Snapshot['guardian'] {
   return { enabled, graceSec, closePct, armed };
 }
 
+const pairing = new Pairing();
+
 let bot: TelegramBot | null = null;
 const TG_TOKEN = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
 if (TG_TOKEN) {
@@ -168,6 +171,11 @@ if (TG_TOKEN) {
       return latest;
     },
     runAction: (action, coin) => runProtective(action, coin),
+    pairing: {
+      complete: (code, by) => pairing.complete(code, by),
+      list: () => pairing.list().map((d) => ({ id: d.id, pairedBy: d.pairedBy, createdAt: d.createdAt })),
+      revokeAll: () => pairing.revokeAll(),
+    },
     guardian: guardian
       ? {
           settings: () => guardian.settings,
@@ -302,9 +310,34 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       restart();
     } else if (msg.type === 'refresh') {
       void poll();
+    } else if (msg.type === 'auth' && typeof msg.deviceToken === 'string' && !local) {
+      const device = pairing.verify(msg.deviceToken);
+      if (device) {
+        authed = true;
+        userName = device.pairedBy;
+        sockets.add(socket);
+        req.log.info(`Paired device ${device.id} connected`);
+        if (!address && isAddress(DEFAULT_ADDRESS)) address = DEFAULT_ADDRESS;
+      }
+      sendSession();
+      restart();
+    } else if (msg.type === 'pairRequest' && !local && !authed) {
+      if (pairCode) pairing.cancelCode(pairCode);
+      pairCode = pairing.createCode((token, by) => {
+        pairCode = null;
+        authed = true;
+        userName = by;
+        sockets.add(socket);
+        if (isAddress(DEFAULT_ADDRESS)) address = DEFAULT_ADDRESS;
+        send(socket, { type: 'paired', token, pairedBy: by });
+        sendSession();
+        restart();
+      });
+      send(socket, { type: 'pairCode', code: pairCode, botUsername: bot?.username ?? null, expiresInSec: CODE_TTL_MS / 1000 });
     } else if (msg.type === 'auth' && typeof msg.initData === 'string' && !local) {
+      const initData = msg.initData;
       void (async () => {
-        const user = bot ? await bot.verifyMiniAppUser(msg.initData) : null;
+        const user = bot ? await bot.verifyMiniAppUser(initData) : null;
         if (user) {
           authed = true;
           userName = user.name;
@@ -321,10 +354,12 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     }
   });
 
+  let pairCode: string | null = null;
   if (local || authed) sockets.add(socket);
   socket.on('close', () => {
     clearInterval(timer);
     sockets.delete(socket);
+    if (pairCode) pairing.cancelCode(pairCode);
   });
   sendSession();
   restart();
