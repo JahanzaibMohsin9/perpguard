@@ -8,6 +8,7 @@ import { fetchSnapshot, isAddress, type Network } from './hyperliquid.ts';
 import { readFile } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
 import { Guardian } from './guardian.ts';
+import { ActionHistory, DistanceTrend, orderIds } from './history.ts';
 import { CODE_TTL_MS, Pairing } from './pairing.ts';
 import { TelegramBot } from './telegram.ts';
 import { isLocalConnection } from './local.ts';
@@ -63,19 +64,32 @@ if (VOICE_ENABLED) {
 const MAX_VOICE_BYTES = 16_000 * 2 * 10; // 10 s of 16 kHz s16le
 
 // ---------- protective actions (shared by glasses and Telegram; one at a time) ----------
+const history = new ActionHistory();
+const trend = new DistanceTrend();
+const EXPLORER = `https://app.hyperliquid${NETWORK === 'testnet' ? '-testnet' : ''}.xyz/explorer/address/${DEFAULT_ADDRESS}`;
+
+/** Every action attempt goes into the audit trail, and live clients get the updated list. */
+function record(action: ActionKind | 'guardian', coin: string, source: string, ok: boolean, message: string, detail?: unknown) {
+  history.add({ ts: Date.now(), coin, action, source, ok, message, orderIds: orderIds(detail) });
+  for (const s of sockets) send(s, { type: 'history', entries: history.recent(10) });
+}
+
 let actionBusy = false;
-async function runProtective(action: ActionKind, coin: string): Promise<{ ok: boolean; message: string }> {
+/** `source` says who and where: "glasses tap", "Telegram (Ali)", "Mini App (Ali)", ... */
+async function runProtective(action: ActionKind, coin: string, source: string): Promise<{ ok: boolean; message: string }> {
   if (!trader) return { ok: false, message: 'Trading not linked for this wallet.' };
   guardian?.userActed(coin); // a person is handling it: Guardian stands down
   if (actionBusy) return { ok: false, message: 'Another action is still running.' };
   actionBusy = true;
   try {
     const result = await trader.run(action, coin);
-    app.log.info({ action, coin, ok: result.ok, detail: result.detail }, 'action');
-    if (!result.ok) return { ok: false, message: result.message };
-    return { ok: true, message: result.message + (await receiptExtras(coin)) };
+    app.log.info({ action, coin, source, ok: result.ok, detail: result.detail }, 'action');
+    const message = result.ok ? result.message + (await receiptExtras(coin)) : result.message;
+    record(action, coin, source, result.ok, message, result.detail);
+    return { ok: result.ok, message };
   } catch (err) {
     app.log.error({ err, action }, 'action failed');
+    record(action, coin, source, false, 'Action failed (server error).');
     return { ok: false, message: 'Action failed. Check the server log.' };
   } finally {
     actionBusy = false;
@@ -91,7 +105,13 @@ async function runGuard(coin: string, fraction: number): Promise<{ ok: boolean; 
   try {
     const result = await trader.guard(coin, fraction);
     app.log.info({ guardian: true, coin, ok: result.ok, detail: result.detail }, 'action');
-    return result.ok ? { ok: true, message: result.message + (await receiptExtras(coin)) } : result;
+    const message = result.ok ? result.message + (await receiptExtras(coin)) : result.message;
+    record('guardian', coin, 'Guardian', result.ok, message, result.detail);
+    return { ok: result.ok, message };
+  } catch (err) {
+    app.log.error({ err }, 'guardian action failed');
+    record('guardian', coin, 'Guardian', false, 'Guardian action failed (server error).');
+    return { ok: false, message: 'Guardian action failed. Check the server log.' };
   } finally {
     actionBusy = false;
     void monitorTick();
@@ -126,6 +146,8 @@ async function monitorTick() {
   monitorInFlight = true;
   try {
     latest = { ...(await fetchSnapshot(NETWORK, DEFAULT_ADDRESS)), canTrade: Boolean(trader), guardian: guardianInfo() };
+    for (const p of latest.positions) trend.add(p.coin, p.liqDistancePct);
+    trend.keepOnly(latest.positions.map((p) => p.coin));
     await bot?.onSnapshot(latest);
     guardian?.onSnapshot(latest);
   } catch (err) {
@@ -173,7 +195,9 @@ if (TG_TOKEN) {
       await monitorTick();
       return latest;
     },
-    runAction: (action, coin) => runProtective(action, coin),
+    runAction: (action, coin, source) => runProtective(action, coin, source),
+    history: () => history.recent(10),
+    explorerUrl: EXPLORER,
     pairing: {
       complete: (code, by) => pairing.complete(code, by),
       list: () => pairing.list().map((d) => ({ id: d.id, pairedBy: d.pairedBy, createdAt: d.createdAt })),
@@ -233,13 +257,16 @@ app.get('/ws', { websocket: true }, (socket, req) => {
   const local = isLocalRequest(req);
   let authed = local;
   let userName: string | null = null;
+  let initDataUser = false; // authed through the Telegram Mini App (vs local or paired glasses)
   let address = authed && isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : '';
   let timer: NodeJS.Timeout | undefined;
   let inFlight = false;
 
   const canTrade = () => Boolean(authed && trader && address.toLowerCase() === trader.master.toLowerCase());
-  const sendSession = () =>
+  const sendSession = () => {
     send(socket, { type: 'session', authed, user: userName, master: authed && isAddress(DEFAULT_ADDRESS) ? DEFAULT_ADDRESS : null });
+    if (authed) send(socket, { type: 'history', entries: history.recent(10) });
+  };
 
   const poll = async () => {
     if (!address) {
@@ -253,7 +280,8 @@ app.get('/ws', { websocket: true }, (socket, req) => {
     if (inFlight) return;
     inFlight = true;
     try {
-      send(socket, { ...(await fetchSnapshot(NETWORK, address)), canTrade: canTrade(), guardian: canTrade() ? guardianInfo() : undefined });
+      const own = canTrade();
+      send(socket, { ...(await fetchSnapshot(NETWORK, address)), canTrade: own, guardian: own ? guardianInfo() : undefined, trend: own ? trend.snapshot() : undefined });
     } catch (err) {
       req.log.warn({ err }, 'snapshot failed');
       send(socket, { type: 'status', level: 'error', message: 'Hyperliquid unreachable. Retrying.' });
@@ -273,10 +301,11 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       send(socket, { type: 'actionResult', requestId: msg.requestId, ok, message });
     if (!trader || !canTrade()) return reply(false, 'Trading not linked for this wallet.');
     if (!ACTIONS.has(msg.action) || !/^[A-Z0-9]{1,12}$/.test(msg.coin)) return reply(false, 'Invalid action.');
-    const result = await runProtective(msg.action, msg.coin);
-    reply(result.ok, result.message);
     const heard = typeof msg.heard === 'string' && msg.heard ? msg.heard.slice(0, 80) : undefined;
-    const source = !local ? `Mini App (${userName ?? 'user'})` : heard ? 'glasses voice' : 'glasses tap';
+    const glasses = local || !initDataUser; // paired remote glasses vs the Mini App
+    const source = glasses ? `${heard ? 'glasses voice' : 'glasses tap'}${local ? '' : ` (${userName ?? 'paired'})`}` : `Mini App (${userName ?? 'user'})`;
+    const result = await runProtective(msg.action, msg.coin, source);
+    reply(result.ok, result.message);
     void bot?.receipt(source, msg.action, msg.coin, result.ok, result.message, heard);
     void poll(); // show the new position state right away
   };
@@ -346,7 +375,9 @@ app.get('/ws', { websocket: true }, (socket, req) => {
         const user = bot ? await bot.verifyMiniAppUser(initData) : null;
         if (user) {
           authed = true;
+          initDataUser = true;
           userName = user.name;
+          sockets.add(socket);
           req.log.info(`Mini App user verified: ${user.id}`);
           if (!address && isAddress(DEFAULT_ADDRESS)) address = DEFAULT_ADDRESS;
         }
@@ -355,6 +386,14 @@ app.get('/ws', { websocket: true }, (socket, req) => {
       })();
     } else if (msg.type === 'action') {
       void runAction(msg);
+    } else if (msg.type === 'guardian' && typeof msg.enabled === 'boolean') {
+      if (!guardian || !canTrade()) return send(socket, { type: 'status', level: 'error', message: 'Guardian needs trading on this account.' });
+      if (guardian.settings.enabled !== msg.enabled) {
+        guardian.update({ enabled: msg.enabled });
+        const by = initDataUser ? `Mini App (${userName ?? 'user'})` : local ? 'glasses' : `glasses (${userName ?? 'paired'})`;
+        void bot?.guardianChanged(msg.enabled, by);
+      }
+      void poll();
     } else if (msg.type === 'voice' && typeof msg.pcm === 'string') {
       void runVoice(msg);
     }

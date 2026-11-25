@@ -250,6 +250,7 @@ export class Trader {
     const absSz = Math.abs(Number(p.szi));
     const mark = await markPx(this.network, coin);
     const parts: string[] = [];
+    let stopRes: ExchangeResponse | undefined;
 
     // 1. partial close
     let sz = roundSz(absSz * fraction, szDecimals);
@@ -282,7 +283,7 @@ export class Trader {
       } else {
         await cancelExistingStops(this.agent, this.network, this.master, coin, a);
         const limit = roundPx(isLong ? trigger * (1 - SLIPPAGE) : trigger * (1 + SLIPPAGE), szDecimals);
-        const stopRes = await exchange(this.agent, this.network, {
+        stopRes = await exchange(this.agent, this.network, {
           type: 'order',
           orders: [{
             a, b: !isLong, p: toWire(limit), s: toWire(remaining), r: true,
@@ -294,7 +295,7 @@ export class Trader {
         parts.push(st.ok ? `safety stop at ${toWire(trigger)} (before liq ${toWire(roundPx(liq, szDecimals))})` : `stop rejected: ${st.text}`);
       }
     }
-    return { ok: true, message: parts.join('; '), detail: closeRes };
+    return { ok: true, message: parts.join('; '), detail: stopRes ? [closeRes, stopRes] : closeRes };
   }
 }
 

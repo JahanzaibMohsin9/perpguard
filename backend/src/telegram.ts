@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
-import { ACTION_LABELS, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
+import { ACTION_LABELS, type ActionKind, type HistoryEntry, type PositionView, type Snapshot } from '../../shared/protocol.ts';
 import { decodeToPcm16k, parseCommand, transcribe } from './voice.ts';
 
 const MAX_VOICE_SECONDS = 20;
@@ -20,6 +20,8 @@ interface LinkedChat {
   id: number;
   title: string;
   paused: boolean;
+  /** Message id of the pinned live risk card (/live), if on. */
+  liveMsgId?: number;
 }
 
 interface BotState {
@@ -73,6 +75,7 @@ function actionButtons(coin: string): Keyboard {
 }
 
 const CONFIRM_TTL_MS = 60_000;
+const LIVE_EDIT_MS = 10_000; // live card edit rate per chat (well under Telegram's limits)
 const HYSTERESIS_PCT = 0.5;
 
 // ---------- bot ----------
@@ -80,8 +83,12 @@ const HYSTERESIS_PCT = 0.5;
 export interface BotDeps {
   /** Latest snapshot of the master account (null if not available yet). */
   getSnapshot: () => Promise<Snapshot | null>;
-  /** Runs a protective action; undefined when trading is not enabled. */
-  runAction?: (action: ActionKind, coin: string) => Promise<{ ok: boolean; message: string }>;
+  /** Runs a protective action; undefined when trading is not enabled. `source` = who and where, for the audit trail. */
+  runAction?: (action: ActionKind, coin: string, source: string) => Promise<{ ok: boolean; message: string }>;
+  /** Recent protective actions, newest first. */
+  history?: () => HistoryEntry[];
+  /** Block explorer page of the protected account. */
+  explorerUrl?: string;
   /** Guardian mode controls; undefined when trading is not enabled. */
   /** Glasses pairing (codes shown on remote glasses). */
   pairing?: {
@@ -154,10 +161,10 @@ export class TelegramBot {
     return this.state.chats.some((c) => c.id === chatId);
   }
 
-  /** Message every linked (and not paused, unless force) chat. */
-  async broadcast(html: string, keyboard?: Keyboard, force = false) {
+  /** Message every linked (and not paused, unless force) chat, except `exceptChatId`. */
+  async broadcast(html: string, keyboard?: Keyboard, force = false, exceptChatId?: number) {
     for (const c of this.state.chats) {
-      if (c.paused && !force) continue;
+      if ((c.paused && !force) || c.id === exceptChatId) continue;
       await this.send(c.id, html, keyboard).catch((err) => this.deps.log.error({ err }, `telegram send to ${c.id} failed`));
     }
   }
@@ -231,6 +238,10 @@ export class TelegramBot {
         });
       case '/status':
         return this.sendStatus(chatId);
+      case '/history':
+        return this.send(chatId, historyHtml(this.deps.history?.() ?? [], this.deps.explorerUrl));
+      case '/live':
+        return this.toggleLive(chatId);
       case '/pause':
         this.setPaused(chatId, true);
         return this.send(chatId, '⏸ Alerts paused for this chat. /resume to turn them back on.');
@@ -343,7 +354,7 @@ Turn off: <code>/guardian off</code>`
       `🎙 <b>${who}</b> said: “${esc(transcript)}”\n→ <b>${ACTION_LABELS[parsed.action]} ${esc(p.coin)}</b> (${p.side} ${p.leverage}x, ${dist} from liquidation)\n\nConfirm? Testnet order, reduce-only. Expires in 60 s.`,
       {
         inline_keyboard: [[
-          { text: `✅ Yes, ${ACTION_LABELS[parsed.action]}`, callback_data: `y|${parsed.action}|${p.coin}|${Date.now()}` },
+          { text: `✅ Yes, ${ACTION_LABELS[parsed.action]}`, callback_data: `y|${parsed.action}|${p.coin}|${Date.now()}|v` },
           { text: 'Cancel', callback_data: 'n' },
         ]],
       },
@@ -371,7 +382,12 @@ Turn off: <code>/guardian off</code>`
     const chatId: number | undefined = q.message?.chat?.id;
     const answer = (text?: string) => this.api('answerCallbackQuery', { callback_query_id: q.id, ...(text ? { text } : {}) }).catch(() => {});
     if (!chatId || !this.isLinked(chatId)) return answer('Not linked.');
-    const [kind, action, coin, ts] = String(q.data ?? '').split('|') as [string, ActionKind, string, string?];
+    const [kind, action, coin, ts, via] = String(q.data ?? '').split('|') as [string, ActionKind, string, string?, string?];
+    const chat = q.message.chat;
+    const isGroup = chat.type === 'group' || chat.type === 'supergroup';
+    // Groups: everyone sees alerts, but only the group's admins (trusted buddies) can act.
+    if (isGroup && !(await this.isGroupAdmin(chatId, q.from?.id))) return answer('Only group admins can protect this account.');
+    const live = this.state.chats.find((c) => c.id === chatId)?.liveMsgId === q.message.message_id;
     const edit = (html: string, keyboard?: Keyboard) =>
       this.api('editMessageText', {
         chat_id: chatId,
@@ -395,12 +411,16 @@ Turn off: <code>/guardian off</code>`
     }
     if (kind === 'a') {
       await answer();
-      return edit(`⚠️ <b>Confirm: ${ACTION_LABELS[action]} ${esc(coin)}?</b>\nTestnet order, reduce-only. Expires in 60 s.`, {
+      const html = `⚠️ <b>Confirm: ${ACTION_LABELS[action]} ${esc(coin)}?</b>\nTestnet order, reduce-only. Expires in 60 s.`;
+      const keyboard = {
         inline_keyboard: [[
           { text: `✅ Yes, ${ACTION_LABELS[action]}`, callback_data: `y|${action}|${coin}|${Date.now()}` },
           { text: 'Cancel', callback_data: 'n' },
         ]],
-      });
+      };
+      // The pinned live card keeps updating, so its confirmations go in a new message.
+      if (live) return this.api('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
+      return edit(html, keyboard);
     }
     if (kind === 'y') {
       if (!ts || Date.now() - Number(ts) > CONFIRM_TTL_MS) {
@@ -409,9 +429,18 @@ Turn off: <code>/guardian off</code>`
       }
       await answer('Sending...');
       await edit(`⏳ ${ACTION_LABELS[action]} ${esc(coin)}: sending...`);
-      const who = q.from?.first_name ? ` by ${esc(q.from.first_name)}` : '';
-      const r = await this.deps.runAction(action, coin);
-      return edit(`${r.ok ? '✅' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b>${who} (Telegram)\n${esc(r.message)}`);
+      const name: string = q.from?.first_name ?? 'someone';
+      const where = isGroup ? ` in ${chat.title ?? 'a group'}` : '';
+      const source = `Telegram${via === 'v' ? ' voice' : ''} (${name}${where})`;
+      const r = await this.deps.runAction(action, coin, source);
+      await edit(`${r.ok ? '✅' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)} (Telegram)\n${esc(r.message)}`);
+      // Everyone else who watches this account learns who stepped in.
+      return this.broadcast(
+        `${r.ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)}${esc(where)} (Telegram)\n${esc(r.message)}`,
+        undefined,
+        true,
+        chatId,
+      );
     }
   }
 
@@ -470,6 +499,83 @@ ${esc(message)}`,
     );
   }
 
+  guardianChanged(enabled: boolean, by: string) {
+    return this.broadcast(`🛡 Guardian turned <b>${enabled ? 'ON' : 'OFF'}</b> from the ${esc(by)}.`, undefined, true);
+  }
+
+  // ---------- groups ----------
+
+  private adminCache = new Map<string, { ok: boolean; at: number }>();
+
+  private async isGroupAdmin(chatId: number, userId: number | undefined): Promise<boolean> {
+    if (!userId) return false;
+    const key = `${chatId}:${userId}`;
+    const hit = this.adminCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.ok;
+    const m = await this.api<{ status: string }>('getChatMember', { chat_id: chatId, user_id: userId }).catch(() => null);
+    const ok = Boolean(m && (m.status === 'creator' || m.status === 'administrator'));
+    this.adminCache.set(key, { ok, at: Date.now() });
+    return ok;
+  }
+
+  // ---------- live risk card (/live): one pinned message, edited as prices move ----------
+
+  private liveText = new Map<number, string>(); // chat -> last text sent
+  private liveAt = new Map<number, number>(); // chat -> last edit time
+
+  private async toggleLive(chatId: number) {
+    const c = this.state.chats.find((x) => x.id === chatId)!;
+    if (c.liveMsgId) {
+      const id = c.liveMsgId;
+      delete c.liveMsgId;
+      this.save();
+      await this.api('unpinChatMessage', { chat_id: chatId, message_id: id }).catch(() => {});
+      await this.api('editMessageText', { chat_id: chatId, message_id: id, text: '📡 Live card stopped. /live to start it again.' }).catch(() => {});
+      return this.send(chatId, '📡 Live card stopped.');
+    }
+    const snap = await this.deps.getSnapshot();
+    const html = liveHtml(snap, (p) => this.risk(p));
+    const kb = this.liveKeyboard(snap);
+    const msg = await this.api<{ message_id: number }>('sendMessage', {
+      chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true,
+      ...(kb ? { reply_markup: kb } : {}),
+    });
+    c.liveMsgId = msg.message_id;
+    this.save();
+    this.liveText.set(chatId, html);
+    this.liveAt.set(chatId, Date.now());
+    const pinned = await this.api('pinChatMessage', { chat_id: chatId, message_id: msg.message_id, disable_notification: true }).then(() => true, () => false);
+    if (!pinned) await this.send(chatId, 'Tip: make me an admin with "Pin messages" so the live card stays on top. It updates either way.');
+  }
+
+  private liveKeyboard(snap: Snapshot | null): Keyboard | undefined {
+    const p = snap?.positions[0]; // riskiest first
+    return p && this.deps.runAction ? actionButtons(p.coin) : undefined;
+  }
+
+  private async updateLiveCards(snap: Snapshot) {
+    const now = Date.now();
+    const stamp = /\nUpdated .*$/;
+    for (const c of this.state.chats) {
+      if (!c.liveMsgId || now - (this.liveAt.get(c.id) ?? 0) < LIVE_EDIT_MS) continue;
+      const html = liveHtml(snap, (p) => this.risk(p));
+      if (html.replace(stamp, '') === (this.liveText.get(c.id) ?? '').replace(stamp, '')) continue; // only the time changed
+      this.liveAt.set(c.id, now);
+      this.liveText.set(c.id, html);
+      const kb = this.liveKeyboard(snap);
+      await this.api('editMessageText', {
+        chat_id: c.id, message_id: c.liveMsgId, text: html, parse_mode: 'HTML', disable_web_page_preview: true,
+        reply_markup: kb ?? { inline_keyboard: [] },
+      }).catch((err: Error) => {
+        if (/not modified/i.test(err.message)) return;
+        if (/not found|MESSAGE_ID_INVALID|can't be edited/i.test(err.message)) {
+          delete c.liveMsgId; // deleted by the user: stop updating
+          this.save();
+        } else this.deps.log.warn(`live card ${c.id}: ${err.message}`);
+      });
+    }
+  }
+
   // ---------- outgoing: alerts and receipts ----------
 
   risk(p: PositionView): Risk {
@@ -496,6 +602,7 @@ ${esc(message)}`,
     }
     for (const coin of this.lastRisk.keys()) if (!seen.has(coin)) this.lastRisk.delete(coin);
     this.primed = true;
+    await this.updateLiveCards(snap);
   }
 
   private alertHtml(p: PositionView, risk: Risk, network: string) {
@@ -581,6 +688,57 @@ function positionHtml(p: PositionView, risk: Risk, network: string): string {
   ].join('\n');
 }
 
+/** 10-cell safety bar: full = far from liquidation (25%+), one cell = about to be liquidated. */
+export function safetyCells(distancePct: number | null): string {
+  const filled = distancePct === null ? 10 : Math.max(1, Math.min(10, Math.round(distancePct / 2.5)));
+  return '█'.repeat(filled) + '░'.repeat(10 - filled);
+}
+
+/** The pinned live card: every position, riskiest first, with Guardian state. */
+export function liveHtml(snap: Snapshot | null, risk: (p: PositionView) => Risk, now = new Date()): string {
+  const lines = [`📡 <b>PerpGuard live</b> · ${snap?.network ?? 'connecting'}`];
+  if (!snap) lines.push('', 'Waiting for data...');
+  else if (snap.positions.length === 0) lines.push('', `No open positions. Equity ${fmt(snap.accountValue, 2)} USDC`);
+  for (const p of snap?.positions ?? []) {
+    const r = risk(p);
+    const d = p.liqDistancePct;
+    lines.push(
+      '',
+      `${RISK_ICON[r]} <b>${esc(p.coin)} ${p.side} ${p.leverage}x</b>  ${r === 'OK' ? 'SAFE' : r}`,
+      `<code>${safetyCells(d)}</code> ${d === null ? 'no liquidation price' : `${d >= 100 ? '>99' : fmt(d, 1)}% to liquidation`}`,
+      `Mark ${fmt(p.markPx)} · Liq ${fmt(p.liqPx)} · PnL ${signed(p.unrealizedPnl)}`,
+      ...(p.minutesToLiq !== null ? [`⏳ ~${fmtMinutes(p.minutesToLiq)} to liquidation at this pace`] : []),
+    );
+  }
+  const g = snap?.guardian;
+  if (g) {
+    const armed = g.armed.map((a) => `closes ${g.closePct}% of ${esc(a.coin)} in ${a.secondsLeft} s`).join(', ');
+    lines.push('', g.enabled ? `🛡 Guardian ON${armed ? `: <b>${armed}</b>` : ''}` : '🛡 Guardian off');
+  }
+  lines.push(`Updated ${now.toISOString().slice(11, 19)} UTC`);
+  return lines.join('\n');
+}
+
+const historyLabel = (e: HistoryEntry) => (e.action === 'guardian' ? 'Guardian close + safety stop' : ACTION_LABELS[e.action]);
+
+/** /history: the audit trail with Hyperliquid order ids. */
+export function historyHtml(entries: HistoryEntry[], explorerUrl?: string): string {
+  if (entries.length === 0) return '📜 No protective actions yet.';
+  const rows = entries.map((e) => {
+    const when = new Date(e.ts).toISOString().replace('T', ' ').slice(5, 16);
+    const ids = e.orderIds.length ? ` · order${e.orderIds.length > 1 ? 's' : ''} ${e.orderIds.join(', ')}` : '';
+    return `${e.ok ? (e.action === 'guardian' ? '🛡' : '✅') : '❌'} ${when} UTC · <b>${esc(historyLabel(e))} ${esc(e.coin)}</b>\n    ${esc(e.source)}${ids}`;
+  });
+  return [
+    `📜 <b>Last ${entries.length} protective action${entries.length > 1 ? 's' : ''}</b> (newest first)`,
+    '',
+    ...rows,
+    '',
+    'Every order is reduce-only and signed by the agent wallet, which cannot withdraw.',
+    ...(explorerUrl ? [`<a href="${esc(explorerUrl)}">Check them on the Hyperliquid explorer</a>`] : []),
+  ].join('\n');
+}
+
 function fmtMinutes(m: number): string {
   if (m < 1) return 'under 1 min';
   if (m < 90) return `${Math.round(m)} min`;
@@ -591,11 +749,14 @@ const HELP = [
   '<b>PerpGuard</b> watches your Hyperliquid positions (testnet) and shows them on Even Realities G2 glasses.',
   '',
   '/status  positions, distance to liquidation, action buttons',
+  '/live  pin a live risk card that updates as prices move',
+  '/history  every protective action, who did it, order ids',
   '/alerts  view or change alert levels',
   '/pause  /resume  mute alerts in this chat',
   '/guardian  auto-protect if nobody answers a DANGER alert',
   '/pair 123456  pair glasses showing a code  (/devices, /unpair)',
   '',
   'Actions are protective only (close 50%, close all, break-even stop, 2% stop) and always ask for confirmation.',
+  'In groups, everyone sees alerts; group admins can act.',
   'PerpGuard never asks for your seed phrase or private key.',
 ].join('\n');

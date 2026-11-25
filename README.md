@@ -25,8 +25,11 @@ Leveraged traders get liquidated while they are away from their screens: walking
 | Surface | Features |
 |---|---|
 | **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, **time to liquidation at the current pace**, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
-| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance and **how many seconds after the alert** the position was protected. **Voice notes** in private chats and in **group chats** (a shared trading desk): the bot transcribes them and replies with confirm buttons. |
-| **Telegram Mini App** | Live dashboard inside Telegram with the same protective buttons, and **spectator mode** to watch any address read-only. |
+| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance and **how many seconds after the alert** the position was protected. **Voice notes** in private chats and in **group chats**: the bot transcribes them and replies with confirm buttons. |
+| **Live risk card** (`/live`) | One **pinned message that updates itself** as prices move: a safety bar, distance to liquidation, time to liquidation and the Guardian countdown, with protective buttons underneath. |
+| **Buddy protection in groups** | Link a group (a trading desk, or friends watching each other's back). Everyone sees the alerts; **group admins** can act on them. When someone steps in, every other linked chat gets "Close 50% ETH **by Ali in Trading Desk**". |
+| **Audit trail** (`/history`) | Every protective action, with **who did it, from where** (glasses tap or voice, Telegram, Mini App, Guardian) and the **Hyperliquid order ids**, plus a link to the account on the Hyperliquid explorer. A key that can trade should leave a visible trail. |
+| **Telegram Mini App** | Live dashboard inside Telegram: the same protective buttons, a **30-minute liquidation-distance chart** with the WARNING and DANGER lines, a **Guardian on/off switch**, recent actions, and **spectator mode** to watch any address read-only. |
 
 ### 🛡 Guardian mode (opt-in)
 Guardian is a dead man's switch for the moments you **can't** answer: asleep, driving or in a meeting.
@@ -55,6 +58,8 @@ The four protective actions are **Close 50%**, **Close all**, **Stop at break-ev
   - Linking a Telegram chat requires a private pairing link.
   - **Glasses that are not on the server's machine** (the packaged app on a phone) start read-only and show a **6-digit pairing code**. A linked user sends `/pair 482913` to the bot from a private chat, and the glasses receive a device token kept in the glasses' storage. Only a SHA-256 hash of each token is stored on the server. `/devices` lists the paired glasses, and `/unpair` revokes them all.
 - **One action at a time** across glasses, bot and Mini App.
+- **Groups:** only the group's admins can press protective buttons. Other members see alerts and receipts only.
+- **Everything is recorded** in the audit trail (`/history`), including failed attempts.
 
 ## How it works
 
@@ -148,7 +153,7 @@ The packaged app runs on the phone, so it reaches the backend through a public U
 ## Tests
 
 ```bash
-npm test    # 32 unit tests, also run by GitHub Actions on every push
+npm test    # 38 unit tests, also run by GitHub Actions on every push
 ```
 
 They cover:
@@ -156,6 +161,7 @@ They cover:
 - **Risk:** liquidation distance for longs and shorts, alert levels, and hysteresis.
 - **Voice grammar:** known phrases map to actions. Unknown speech, "buy" commands and Whisper's silence hallucinations map to nothing.
 - **Telegram Mini App login:** valid launch data passes. Tampered, foreign-bot and stale data is rejected.
+- **Telegram live card and audit trail:** the safety bar, the Guardian countdown, order ids pulled from exchange responses, and HTML escaping.
 - **Glasses cards:** only glyphs the G2 display can render, and every card fits the lens.
 - **Time to liquidation, Guardian and pairing:** pace estimates, the Guardian timer and cooldown, and one-time pairing codes with hashed device tokens.
 - **Local vs remote:** only direct connections from the server's own machine can trade without pairing; tunnel (ngrok, Cloudflare) and LAN traffic cannot.

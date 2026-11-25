@@ -24,6 +24,8 @@ export interface Snapshot {
   positions: PositionView[];
   canTrade: boolean; // an approved agent wallet is linked for this address
   guardian?: { enabled: boolean; graceSec: number; closePct: number; armed: Array<{ coin: string; secondsLeft: number }> };
+  /** Liquidation distance (%) over the last ~30 min per coin, oldest first (protected account only). */
+  trend?: Record<string, number[]>;
   ts: number;
 }
 
@@ -86,7 +88,33 @@ export interface PairedMessage {
   pairedBy: string;
 }
 
-export type ServerMessage = PairCodeMessage | PairedMessage | Snapshot | StatusMessage | ActionResultMessage | VoiceResultMessage | SessionMessage | NoticeMessage;
+/** One protective action in the audit trail. */
+export interface HistoryEntry {
+  ts: number;
+  coin: string;
+  action: ActionKind | 'guardian';
+  source: string; // "glasses tap", "Telegram (Ali)", "Guardian", ...
+  ok: boolean;
+  message: string;
+  orderIds: number[]; // Hyperliquid order ids, checkable with the orderStatus info call
+}
+
+/** Recent protective actions, newest first (sent to authed clients on connect and after each action). */
+export interface HistoryMessage {
+  type: 'history';
+  entries: HistoryEntry[];
+}
+
+export type ServerMessage =
+  | PairCodeMessage
+  | PairedMessage
+  | Snapshot
+  | StatusMessage
+  | ActionResultMessage
+  | VoiceResultMessage
+  | SessionMessage
+  | NoticeMessage
+  | HistoryMessage;
 
 export type ClientMessage =
   | { type: 'watch'; address: string } // spectator / read-only: watch any address
@@ -94,5 +122,6 @@ export type ClientMessage =
   | { type: 'auth'; initData?: string; deviceToken?: string } // Mini App launch data, or a paired device's token
   | { type: 'pairRequest' } // remote glasses ask for a pairing code
   | { type: 'action'; requestId: string; action: ActionKind; coin: string; heard?: string } // heard = voice transcript
+  | { type: 'guardian'; enabled: boolean } // turn Guardian on or off (authed clients that can trade)
   // Push-to-talk audio: base64 of 16 kHz mono s16le PCM. screenCoin = position shown on the glasses.
   | { type: 'voice'; requestId: string; pcm: string; screenCoin: string | null; coins: string[] };

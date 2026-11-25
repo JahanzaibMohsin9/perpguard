@@ -62,6 +62,25 @@
   .sheet h3 { margin: 0 0 6px; font-size: 18px; }
   .sheet p { margin: 0 0 14px; color: var(--muted); }
   .sheet .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .spark { margin-top: 10px; }
+  .spark svg { display: block; width: 100%; height: 44px; }
+  .spark .cap { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; margin-top: 2px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 14px; margin: 0 0 8px; }
+  .guard { display: flex; align-items: center; gap: 12px; }
+  .guard .txt { flex: 1; font-size: 13px; color: var(--muted); }
+  .guard .txt b { color: var(--text); }
+  .guard.armed { border-color: var(--danger); }
+  .switch { position: relative; width: 50px; height: 30px; flex: none; padding: 0; border-radius: 999px; background: var(--line); }
+  .switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left .2s; }
+  .switch.on { background: var(--ok); }
+  .switch.on::after { left: 23px; }
+  .hist { list-style: none; margin: 0; padding: 0; }
+  .hist li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .hist li:first-child { border-top: 0; padding-top: 0; }
+  .hist .what { font-weight: 600; }
+  .hist .meta { color: var(--muted); font-size: 12px; }
+  .hist .bad { color: var(--danger); }
   .toast { position: fixed; left: 16px; right: 16px; bottom: 18px; max-width: 528px; margin: 0 auto; padding: 12px 14px; border-radius: 12px; background: var(--text); color: var(--bg); font-weight: 600; transform: translateY(150%); transition: transform .25s, visibility .25s; visibility: hidden; z-index: 20; }
   .toast.show { transform: none; visibility: visible; }
 </style>
@@ -81,7 +100,9 @@
     <div><div class="label" id="who">Account</div><div class="value" id="addr">-</div></div>
     <div style="text-align:right"><div class="label">Equity</div><div class="value" id="equity">-</div></div>
   </div>
+  <div id="guardian"></div>
   <div id="positions"><div class="status">Connecting...</div></div>
+  <div id="history"></div>
 
   <section class="spectate">
     <h2>Spectator mode</h2>
@@ -141,7 +162,8 @@
   const haptic = (type) => tgEvent('web_app_trigger_haptic_feedback', { type: 'notification', notification_type: type });
 
   // ---------- state ----------
-  let ws, session = { authed: false, user: null, master: null }, snap = null, pending = null, reconnectMs = 1000;
+  let ws, session = { authed: false, user: null, master: null }, snap = null, pending = null, reconnectMs = 1000, history = [];
+  const HLABEL = { ...LABELS, guardian: 'Guardian close + safety stop' };
   const watched = () => snap && snap.address;
 
   function fmt(n, d) {
@@ -171,6 +193,8 @@
     $('who').textContent = snap.canTrade ? `Your account${session.user ? ' · ' + session.user : ''}` : 'Watching (read-only)';
     $('addr').textContent = short(snap.address);
     $('equity').textContent = `${fmt(snap.accountValue, 2)} USDC`;
+    renderGuardian();
+    renderHistory();
     const box = $('positions');
     if (!snap.positions.length) { box.innerHTML = '<div class="empty">No open positions.</div>'; return; }
     box.innerHTML = snap.positions.map((p) => {
@@ -191,9 +215,57 @@
         </div>
         <div class="bar"><i style="width:${width}%;background:${color}"></i></div>
         <div class="dist">${d === null ? 'No liquidation price' : d >= 100 ? 'More than 99% from liquidation' : `${fmt(d, 1)}% from liquidation`}${p.minutesToLiq !== null && p.minutesToLiq !== undefined ? ` · <b>~${p.minutesToLiq < 1 ? '<1' : p.minutesToLiq < 90 ? Math.round(p.minutesToLiq) : (p.minutesToLiq / 60).toFixed(1)}${p.minutesToLiq >= 90 ? ' h' : ' min'}</b> at this pace` : ''}</div>
+        ${spark((snap.trend || {})[p.coin])}
         ${actions}
       </div>`;
     }).join('');
+  }
+
+  // Liquidation distance over the last ~30 min, with the WARNING (8%) and DANGER (3%) lines.
+  function spark(values) {
+    if (!values || values.length < 3) return '';
+    const W = 300, H = 44, top = Math.max(10, ...values) * 1.1;
+    const x = (i) => (i / (values.length - 1)) * W;
+    const y = (v) => H - 2 - (Math.max(0, v) / top) * (H - 4);
+    const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const last = values[values.length - 1];
+    const color = last < 3 ? 'var(--danger)' : last < 8 ? 'var(--warn)' : 'var(--ok)';
+    const line = (v, c) => `<line x1="0" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="${c}" stroke-width="1" stroke-dasharray="3 4" opacity=".7" vector-effect="non-scaling-stroke"/>`;
+    const mins = Math.max(1, Math.round((values.length * 10) / 60));
+    return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Distance to liquidation trend">
+      ${line(8, 'var(--warn)')}${line(3, 'var(--danger)')}
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </svg><div class="cap"><span>Distance to liquidation, last ${mins} min</span><span>${fmt(last, 1)}%</span></div></div>`;
+  }
+
+  function renderGuardian() {
+    const g = snap && snap.canTrade ? snap.guardian : null;
+    if (!g) { $('guardian').innerHTML = ''; return; }
+    const armed = g.enabled && g.armed.length;
+    const txt = armed
+      ? `<b>Armed:</b> closes ${g.closePct}% of ${g.armed.map((a) => `${esc(a.coin)} in ${a.secondsLeft} s`).join(', ')} unless someone acts.`
+      : g.enabled
+        ? `<b>Guardian on.</b> If a DANGER alert gets no answer in ${g.graceSec} s, it closes ${g.closePct}% and sets a safety stop.`
+        : `<b>Guardian off.</b> Turn on to auto-protect when nobody answers a DANGER alert.`;
+    $('guardian').innerHTML = `<div class="card guard ${armed ? 'armed' : ''}"><div class="txt">🛡 ${txt}</div>
+      <button class="switch ${g.enabled ? 'on' : ''}" id="guardSwitch" role="switch" aria-checked="${g.enabled}" aria-label="Guardian"></button></div>`;
+    $('guardSwitch').onclick = () => {
+      send({ type: 'guardian', enabled: !g.enabled });
+      tgEvent('web_app_trigger_haptic_feedback', { type: 'impact', impact_style: 'medium' });
+      toast(`Guardian ${g.enabled ? 'off' : 'on'}`);
+    };
+  }
+
+  function renderHistory() {
+    if (!session.authed || !history.length || !snap || !snap.canTrade) { $('history').innerHTML = ''; return; }
+    const rows = history.slice(0, 5).map((e) => {
+      const t = new Date(e.ts);
+      const when = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+      const ids = e.orderIds.length ? ` · order ${e.orderIds.join(', ')}` : '';
+      return `<li><div class="what ${e.ok ? '' : 'bad'}">${e.ok ? (e.action === 'guardian' ? '🛡' : '✅') : '❌'} ${esc(HLABEL[e.action] || e.action)} ${esc(e.coin)}</div>
+        <div class="meta">${when} · ${esc(e.source)}${esc(ids)}</div></li>`;
+    }).join('');
+    $('history').innerHTML = `<div class="card"><h2>Recent protective actions</h2><ul class="hist">${rows}</ul></div>`;
   }
 
   // ---------- confirm sheet ----------
@@ -241,7 +313,9 @@
       const m = JSON.parse(ev.data);
       if (m.type === 'session') { session = m; render(); }
       else if (m.type === 'snapshot') { snap = m; setLive(true, `${m.network} · live`); render(); }
+      else if (m.type === 'history') { history = m.entries || []; renderHistory(); }
       else if (m.type === 'actionResult') { if (m.requestId === pending) { pending = null; toast(m.message, m.ok); render(); } }
+      else if (m.type === 'status' && m.level === 'error' && snap) { toast(m.message, false); }
       else if (m.type === 'status' && !snap) { $('positions').innerHTML = `<div class="status">${esc(m.message)}</div>`; }
     };
     ws.onclose = () => { setLive(false, 'reconnecting'); setTimeout(connect, reconnectMs); reconnectMs = Math.min(reconnectMs * 2, 15000); };
