@@ -1,0 +1,20 @@
+PerpGuard shows how close your Hyperliquid perpetual position is to liquidation, right on your G2 lens, and lets you protect it in seconds.
+
+On the glasses:
+- One card per position: side, leverage, mark price, liquidation price and a distance bar with SAFE / WARNING / DANGER.
+- "~N min to liq" when the price is moving toward your liquidation.
+- Tap for protective actions only: close 50%, close all, stop at break-even, or a 2% stop. Every action needs a second tap to confirm.
+- Hold to talk: say "close half" or "stop at break even". Speech-to-text runs on your own PerpGuard server.
+
+With Telegram:
+- Alerts when a position crosses into WARNING or DANGER, with one-tap protective buttons and receipts.
+- A Mini App with live cards, and voice notes in groups.
+- Optional Guardian mode: if a DANGER alert goes unanswered, it closes a small part of the position and places a safety stop.
+
+Safety:
+- Testnet only. PerpGuard uses a Hyperliquid API (agent) wallet, which can trade but can never withdraw funds.
+- It never opens or increases a position.
+- Packaged glasses pair with your bot using a one-time 6-digit code.
+
+PerpGuard needs your own PerpGuard server (open source): https://github.com/jahanzaibmohsin9/perpguard
+This is a risk tool, not financial advice.
