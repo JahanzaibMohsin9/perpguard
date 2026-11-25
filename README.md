@@ -118,6 +118,16 @@ The agent key can trade but can never withdraw. Even so, never commit `.env`.
 3. Start the backend. It logs a **private pairing link**. Open it to link your chat, or use `?startgroup=<code>` to link a group.
 4. Mini App: set `TUNNEL=cloudflare`. The backend opens a free Cloudflare quick tunnel and points the bot's menu button at it. Send `/app` to get a button.
 
+The bot and the tunnels retry with backoff, so the backend can start before the VPN does.
+
+### 4. Packaged glasses app (`.ehpk`, optional)
+The packaged app runs on the phone, so it reaches the backend through a public URL that must never change: it is baked into the build and the manifest whitelist.
+1. Create a free ngrok account and copy its **dev domain** (Domains page) and **authtoken**.
+2. In `backend/.env`, set `NGROK_AUTHTOKEN`, `NGROK_DOMAIN` and `TUNNEL=cloudflare,ngrok`.
+3. Add `https://<domain>` and `wss://<domain>` to `glasses/app.json` → `permissions[network].whitelist`.
+4. Put `VITE_BACKEND_URL=https://<domain>` in `glasses/.env.production.local`, then run `npm run pack -w glasses`.
+5. Open the app on the glasses. They show a 6-digit code. Send `/pair <code>` to your bot, and the glasses are linked.
+
 ### Environment variables (`backend/.env`)
 | Variable | Purpose |
 |---|---|
@@ -126,7 +136,8 @@ The agent key can trade but can never withdraw. Even so, never commit `.env`.
 | `HL_AGENT_KEY` | API wallet key; leave empty for read-only |
 | `POLL_MS` | Snapshot interval for the glasses (default 3000) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_PROXY` | Telegram bot, and an optional HTTP proxy for it |
-| `TUNNEL` | `cloudflare` to serve the Mini App on a public URL |
+| `TUNNEL` | Comma list: `cloudflare` (Mini App URL), `ngrok` (fixed URL for packaged glasses) |
+| `NGROK_AUTHTOKEN`, `NGROK_DOMAIN` | ngrok account token and its free dev domain |
 | `WHISPER_MODEL`, `VOICE` | Whisper model id (default `onnx-community/whisper-base.en`); `VOICE=off` disables voice |
 
 ### Dev scripts (`backend/scripts/`, testnet only)
@@ -137,7 +148,7 @@ The agent key can trade but can never withdraw. Even so, never commit `.env`.
 ## Tests
 
 ```bash
-npm test    # 16 unit tests, also run by GitHub Actions on every push
+npm test    # 32 unit tests, also run by GitHub Actions on every push
 ```
 
 They cover:
@@ -146,12 +157,14 @@ They cover:
 - **Voice grammar:** known phrases map to actions. Unknown speech, "buy" commands and Whisper's silence hallucinations map to nothing.
 - **Telegram Mini App login:** valid launch data passes. Tampered, foreign-bot and stale data is rejected.
 - **Glasses cards:** only glyphs the G2 display can render, and every card fits the lens.
+- **Time to liquidation, Guardian and pairing:** pace estimates, the Guardian timer and cooldown, and one-time pairing codes with hashed device tokens.
+- **Local vs remote:** only direct connections from the server's own machine can trade without pairing; tunnel (ngrok, Cloudflare) and LAN traffic cannot.
 
 ## Notes and limitations
 
 - **Unified accounts.** With Hyperliquid's unified account mode, cross-margin positions are backed by the whole balance, so the liquidation price can be far away. Isolated margin shows the real per-position risk.
 - **Display.** The G2 text card uses only glyphs known to render on the display (no emoji).
-- **Real glasses.** Built and tested in the Even Hub simulator. On real glasses, set the backend's public origin in `glasses/app.json` → `permissions[network].whitelist`, then package with `npm run pack -w glasses`.
+- **Real glasses.** We have no G2 hardware, so everything is tested in the Even Hub simulator, including the packaged build reaching the backend through ngrok and pairing over Telegram. See setup step 4.
 
 ## Feature requests (for the teams behind the APIs we used)
 

@@ -39,3 +39,25 @@ export function startQuickTunnel(port: number, log: (msg: string) => void): Prom
     process.on('exit', () => child.kill());
   });
 }
+
+/**
+ * Stable public URL for packaged glasses: an ngrok free "dev domain" (one fixed hostname per account).
+ * The .ehpk bakes this URL in, so it must not change between restarts. The browser warning page that
+ * ngrok shows on free domains only affects HTML page loads, so the Mini App keeps the Cloudflare tunnel.
+ */
+export async function startNgrok(port: number, authtoken: string, domain: string): Promise<{ url: string; stop: () => Promise<void> }> {
+  const { default: ngrok } = await import('@ngrok/ngrok'); // native module: load only when used
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('ngrok did not connect within 45 s')), 45_000);
+  });
+  try {
+    const listener = await Promise.race([ngrok.forward({ addr: port, authtoken, domain }), timeout]);
+    return { url: listener.url() ?? `https://${domain}`, stop: () => listener.close() };
+  } catch (err) {
+    await ngrok.kill().catch(() => undefined); // drop a half-open session before the caller retries
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}

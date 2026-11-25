@@ -10,7 +10,8 @@ import type { FastifyRequest } from 'fastify';
 import { Guardian } from './guardian.ts';
 import { CODE_TTL_MS, Pairing } from './pairing.ts';
 import { TelegramBot } from './telegram.ts';
-import { startQuickTunnel } from './tunnel.ts';
+import { isLocalConnection } from './local.ts';
+import { startNgrok, startQuickTunnel } from './tunnel.ts';
 import { loadWhisper, parseCommand, transcribe } from './voice.ts';
 import type { Snapshot } from '../../shared/protocol.ts';
 
@@ -162,6 +163,8 @@ function guardianInfo(): Snapshot['guardian'] {
 
 const pairing = new Pairing();
 
+/** Public Mini App URL from the Cloudflare tunnel; applied to the bot's menu button whenever both exist. */
+let miniAppUrl: string | null = null;
 let bot: TelegramBot | null = null;
 const TG_TOKEN = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
 if (TG_TOKEN) {
@@ -186,10 +189,20 @@ if (TG_TOKEN) {
     voiceEnabled: VOICE_ENABLED,
     log: { info: (m) => app.log.info(m), warn: (m) => app.log.warn(m), error: (o, m) => app.log.error(o, m) },
   });
-  tg.start().then(
-    () => (bot = tg),
-    (err: Error) => app.log.error(`Telegram disabled: ${err.message}`),
-  );
+  // Retry with backoff: Telegram may only be reachable once the VPN/proxy comes up.
+  const startBot = async (delayMs = 5000): Promise<void> => {
+    try {
+      await tg.start();
+      bot = tg;
+      if (miniAppUrl) await tg.setMiniAppUrl(miniAppUrl).catch((err: Error) => app.log.error(`menu button: ${err.message}`));
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (/unauthorized|401|not found|404/i.test(msg)) return void app.log.error(`Telegram disabled: ${msg} (check TELEGRAM_BOT_TOKEN)`);
+      app.log.warn(`Telegram unreachable (${msg}); retrying in ${delayMs / 1000}s`);
+      setTimeout(() => void startBot(Math.min(delayMs * 2, 60_000)), delayMs);
+    }
+  };
+  void startBot();
 }
 setInterval(() => void monitorTick(), Math.max(POLL_MS, 5000));
 
@@ -207,15 +220,8 @@ app.get('/app', async (_req, reply) => {
   return readFile(MINI_APP, 'utf8');
 });
 
-/**
- * Direct connection from this PC (the glasses simulator / Even App on the same machine).
- * Requests through the Cloudflare tunnel also arrive from 127.0.0.1, but carry forwarding headers.
- */
 function isLocalRequest(req: FastifyRequest): boolean {
-  const ip = req.socket.remoteAddress ?? '';
-  const loopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-  const h = req.headers;
-  return loopback && !h['cf-connecting-ip'] && !h['x-forwarded-for'] && !h['cf-ray'];
+  return isLocalConnection(req.socket.remoteAddress, req.headers);
 }
 
 function send(socket: WebSocket, msg: ServerMessage) {
@@ -368,14 +374,38 @@ app.get('/ws', { websocket: true }, (socket, req) => {
 await app.listen({ port: PORT, host: '0.0.0.0' });
 console.log(`[perpguard] backend on http://localhost:${PORT} (${NETWORK}, ${trader ? 'trading enabled' : 'read-only'})`);
 
-// Public URL for the Mini App (opt-in): TUNNEL=cloudflare
-if (process.env.TUNNEL === 'cloudflare') {
-  startQuickTunnel(PORT, (m) => app.log.warn(m)).then(
-    async ({ url }) => {
-      app.log.info(`Mini App public URL: ${url}/app`);
-      for (let i = 0; i < 30 && !bot; i++) await new Promise((r) => setTimeout(r, 1000)); // wait for the bot
-      await bot?.setMiniAppUrl(`${url}/app`).catch((err: Error) => app.log.error(`menu button: ${err.message}`));
-    },
-    (err: Error) => app.log.error(`Tunnel failed: ${err.message}`),
-  );
+// Public URLs (opt-in), e.g. TUNNEL=cloudflare,ngrok
+//   cloudflare: Mini App (new URL each start; the bot updates its menu button)
+//   ngrok:      fixed URL for packaged glasses (NGROK_AUTHTOKEN + NGROK_DOMAIN)
+const tunnels = new Set((process.env.TUNNEL ?? '').split(',').map((t) => t.trim().toLowerCase()));
+if (tunnels.has('ngrok')) {
+  const { NGROK_AUTHTOKEN, NGROK_DOMAIN } = process.env;
+  if (!NGROK_AUTHTOKEN || !NGROK_DOMAIN) app.log.error('TUNNEL=ngrok needs NGROK_AUTHTOKEN and NGROK_DOMAIN');
+  else {
+    // Retry with backoff: the network (or VPN) may come up after the backend.
+    const connectNgrok = async (delayMs = 5000): Promise<void> => {
+      try {
+        const { url } = await startNgrok(PORT, NGROK_AUTHTOKEN, NGROK_DOMAIN);
+        app.log.info(`Glasses public URL: ${url}`);
+      } catch (err) {
+        app.log.warn(`ngrok failed (${(err as Error).message}); retrying in ${delayMs / 1000}s`);
+        setTimeout(() => void connectNgrok(Math.min(delayMs * 2, 60_000)), delayMs);
+      }
+    };
+    void connectNgrok();
+  }
+}
+if (tunnels.has('cloudflare')) {
+  const connectCloudflare = async (delayMs = 10_000): Promise<void> => {
+    try {
+      const { url } = await startQuickTunnel(PORT, (m) => app.log.warn(m));
+      miniAppUrl = `${url}/app`;
+      app.log.info(`Mini App public URL: ${miniAppUrl}`);
+      await bot?.setMiniAppUrl(miniAppUrl).catch((err: Error) => app.log.error(`menu button: ${err.message}`));
+    } catch (err) {
+      app.log.warn(`Cloudflare tunnel failed (${(err as Error).message}); retrying in ${delayMs / 1000}s`);
+      setTimeout(() => void connectCloudflare(Math.min(delayMs * 2, 120_000)), delayMs);
+    }
+  };
+  void connectCloudflare();
 }
