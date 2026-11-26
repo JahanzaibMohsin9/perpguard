@@ -81,6 +81,7 @@ export async function fetchSnapshot(network: Network, address: string): Promise<
         liqDistancePct,
         unrealizedPnl: Number(p.unrealizedPnl),
         minutesToLiq: minutesToLiquidation(markHistory.samples(p.coin), side, markPx, liqPx),
+        isolated: p.leverage.type === 'isolated',
       };
     })
     .filter((p) => p.size > 0)

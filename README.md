@@ -10,6 +10,22 @@ Tracks: **02 Crypto & DeFi (Hyperliquid)** + **01 Messaging (Telegram)**.
 **▶ Try it in your browser (no install):** https://jahanzaibmohsin9.github.io/perpguard/
 It's the real glasses card on live Hyperliquid data for any address, with a "random live trader" button.
 
+### For judges: 60 seconds
+1. **Watch the demo (2:44):** https://youtu.be/W9RgstmENQ4
+2. **Try the glasses card** on live Hyperliquid data for any address, no install: https://jahanzaibmohsin9.github.io/perpguard/
+3. **Check that the orders are real.** Every action in the video is an order on the Hyperliquid testnet. Open the [demo account on the Hyperliquid testnet explorer](https://app.hyperliquid-testnet.xyz/explorer/address/0xc1bBF5a49b4F8B7CF0CE9efa1988f25892a654c7) and find these order ids (Nov 26, 2026, UTC):
+
+   | Time | Action | Who / from where | Hyperliquid order id |
+   |---|---|---|---|
+   | 14:44 | Close 50% ETH | glasses, voice "close half" | 66028697310 |
+   | 14:46 | Close 50% ETH | glasses, voice "close half" | 66028753935 |
+   | 14:48 | Stop 2% away ETH | glasses, tap | 66028840378 |
+   | 14:53 | Close 50% ETH | Telegram group voice note (admin in "Perguard desk") | 66029087496 |
+   | 14:59 | Guardian: close 25% + safety stop | Guardian (nobody answered the DANGER alert) | 66029344164, 66029345793 |
+
+   Later the safety stop closed the rest of the position. It was never liquidated.
+4. **Packaged app:** `perpguard-0.2.0.ehpk` on the [Releases page](https://github.com/JahanzaibMohsin9/perpguard/releases).
+
 > ⚠️ **Testnet only.** PerpGuard trades on the Hyperliquid **testnet** and never holds user funds. It gives no financial advice. Every action is **protective**: it can reduce or protect a position, but it never opens or increases one.
 
 | Live risk card | Tap menu | Confirm | Receipt | Hold to talk |
@@ -24,7 +40,7 @@ Leveraged traders get liquidated while they are away from their screens: walking
 
 | Surface | Features |
 |---|---|
-| **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, **time to liquidation at the current pace**, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
+| **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, **time to liquidation at the current pace**, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"add margin"*, *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
 | **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance and **how many seconds after the alert** the position was protected. **Voice notes** in private chats and in **group chats**: the bot transcribes them and replies with confirm buttons. |
 | **Live risk card** (`/live`) | One **pinned message that updates itself** as prices move: a safety bar, distance to liquidation, time to liquidation and the Guardian countdown, with protective buttons underneath. |
 | **Buddy protection in groups** | Link a group (a trading desk, or friends watching each other's back). Everyone sees the alerts; **group admins** can act on them. When someone steps in, every other linked chat gets "Close 50% ETH **by Ali in Trading Desk**". |
@@ -41,7 +57,10 @@ Guardian is a dead man's switch for the moments you **can't** answer: asleep, dr
 
 It acts at most once per position every 10 minutes. Turn it on in Telegram with `/guardian on` (or `/guardian on 60 25`), and off with `/guardian off`.
 
-The four protective actions are **Close 50%**, **Close all**, **Stop at break-even** (refused when it would trigger immediately) and **Stop 2% away**. All four are reduce-only orders. A new stop replaces the old one, so stops never pile up.
+The five protective actions:
+- **Add margin** (isolated positions): moves free USDC into the position's margin so liquidation goes back to **8% away** (the WARNING line), capped at 500 USDC per action. The position size never changes. This is the fix that actually moves the liquidation price: on an isolated position Hyperliquid releases margin pro rata when you close part of it, so **closing half barely moves liquidation**. The receipts say so.
+- **Close 50%** and **Close all**: reduce-only market orders (5% price cap).
+- **Stop at break-even** (refused when it would trigger immediately) and **Stop 2% away**: reduce-only stop-losses. A new stop replaces the old one, so stops never pile up.
 
 ## Safety design
 
@@ -133,6 +152,8 @@ The packaged app runs on the phone, so it reaches the backend through a public U
 4. Put `VITE_BACKEND_URL=https://<domain>` in `glasses/.env.production.local`, then run `npm run pack -w glasses`.
 5. Open the app on the glasses. They show a 6-digit code. Send `/pair <code>` to your bot, and the glasses are linked.
 
+A ready-made `perpguard-0.2.0.ehpk` is on the [Releases page](https://github.com/JahanzaibMohsin9/perpguard/releases). It talks only to `http://localhost:8787`, so it works with a backend on the same machine (for example in the Even Hub simulator). It contains no keys and no server address of ours. For a phone, build your own with the steps above so it points at your URL.
+
 ### Environment variables (`backend/.env`)
 | Variable | Purpose |
 |---|---|
@@ -153,12 +174,13 @@ The packaged app runs on the phone, so it reaches the backend through a public U
 ## Tests
 
 ```bash
-npm test    # 38 unit tests, also run by GitHub Actions on every push
+npm test    # 40 unit tests, also run by GitHub Actions on every push
 ```
 
 They cover:
 - **Order signing:** the action hash matches the **official Hyperliquid Python SDK golden vector**, and signatures recover to the agent address. Number formatting is checked too.
 - **Risk:** liquidation distance for longs and shorts, alert levels, and hysteresis.
+- **Add margin:** the margin formula reproduces a real testnet move (+25 USDC took a 0.7032 ETH position's liquidation from 1672.40 to 1636.12), for longs and shorts.
 - **Voice grammar:** known phrases map to actions. Unknown speech, "buy" commands and Whisper's silence hallucinations map to nothing.
 - **Telegram Mini App login:** valid launch data passes. Tampered, foreign-bot and stale data is rejected.
 - **Telegram live card and audit trail:** the safety bar, the Guardian countdown, order ids pulled from exchange responses, and HTML escaping.

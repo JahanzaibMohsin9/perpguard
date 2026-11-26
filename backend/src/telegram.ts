@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
-import { ACTION_LABELS, type ActionKind, type HistoryEntry, type PositionView, type Snapshot } from '../../shared/protocol.ts';
+import { ACTION_LABELS, ADD_MARGIN_MAX_USD, ADD_MARGIN_TARGET_PCT, type ActionKind, type HistoryEntry, type PositionView, type Snapshot } from '../../shared/protocol.ts';
 import { decodeToPcm16k, parseCommand, transcribe } from './voice.ts';
 
 const MAX_VOICE_SECONDS = 20;
@@ -71,7 +71,14 @@ type Keyboard = { inline_keyboard: Array<Array<{ text: string; callback_data: st
 /** Callback data layout (max 64 bytes): "a|<action>|<coin>" ask, "y|<action>|<coin>|<ts>" confirm, "n" cancel. */
 function actionButtons(coin: string): Keyboard {
   const b = (k: ActionKind) => ({ text: ACTION_LABELS[k], callback_data: `a|${k}|${coin}` });
-  return { inline_keyboard: [[b('close50'), b('closeAll')], [b('stopBreakEven'), b('stop2pct')]] };
+  return { inline_keyboard: [[b('addMargin'), b('close50')], [b('closeAll'), b('stopBreakEven')], [b('stop2pct')]] };
+}
+
+/** What a confirmed action will do, in one line (adding margin is not an order). */
+function actionNote(action: ActionKind): string {
+  return action === 'addMargin'
+    ? `Moves free USDC into this isolated position so liquidation is ${ADD_MARGIN_TARGET_PCT}% away (max ${ADD_MARGIN_MAX_USD} USDC). The size never changes.`
+    : 'Testnet order, reduce-only.';
 }
 
 const CONFIRM_TTL_MS = 60_000;
@@ -342,7 +349,7 @@ Turn off: <code>/guardian off</code>`
     if (!parsed) {
       // In groups people talk about other things: stay quiet unless it was a command.
       if (isGroup) return;
-      return say(`🎙 Heard: “${esc(transcript || '(nothing)')}”\nNot a PerpGuard command. Try: <i>close half, close all, break even, two percent stop</i>.`);
+      return say(`🎙 Heard: “${esc(transcript || '(nothing)')}”\nNot a PerpGuard command. Try: <i>add margin, close half, close all, break even, two percent stop</i>.`);
     }
     // No coin named: use the riskiest position (snapshots are sorted riskiest first).
     const p = parsed.coin ? positions.find((x) => x.coin === parsed.coin) : positions[0];
@@ -351,7 +358,7 @@ Turn off: <code>/guardian off</code>`
 
     const dist = p.liqDistancePct === null ? '-' : `${fmt(p.liqDistancePct, 1)}%`;
     return say(
-      `🎙 <b>${who}</b> said: “${esc(transcript)}”\n→ <b>${ACTION_LABELS[parsed.action]} ${esc(p.coin)}</b> (${p.side} ${p.leverage}x, ${dist} from liquidation)\n\nConfirm? Testnet order, reduce-only. Expires in 60 s.`,
+      `🎙 <b>${who}</b> said: “${esc(transcript)}”\n→ <b>${ACTION_LABELS[parsed.action]} ${esc(p.coin)}</b> (${p.side} ${p.leverage}x, ${dist} from liquidation)\n\nConfirm? ${actionNote(parsed.action)} Expires in 60 s.`,
       {
         inline_keyboard: [[
           { text: `✅ Yes, ${ACTION_LABELS[parsed.action]}`, callback_data: `y|${parsed.action}|${p.coin}|${Date.now()}|v` },
@@ -411,7 +418,7 @@ Turn off: <code>/guardian off</code>`
     }
     if (kind === 'a') {
       await answer();
-      const html = `⚠️ <b>Confirm: ${ACTION_LABELS[action]} ${esc(coin)}?</b>\nTestnet order, reduce-only. Expires in 60 s.`;
+      const html = `⚠️ <b>Confirm: ${ACTION_LABELS[action]} ${esc(coin)}?</b>\n${actionNote(action)} Expires in 60 s.`;
       const keyboard = {
         inline_keyboard: [[
           { text: `✅ Yes, ${ACTION_LABELS[action]}`, callback_data: `y|${action}|${coin}|${Date.now()}` },
@@ -756,7 +763,7 @@ const HELP = [
   '/guardian  auto-protect if nobody answers a DANGER alert',
   '/pair 123456  pair glasses showing a code  (/devices, /unpair)',
   '',
-  'Actions are protective only (close 50%, close all, break-even stop, 2% stop) and always ask for confirmation.',
+  'Actions are protective only (add margin, close 50%, close all, break-even stop, 2% stop) and always ask for confirmation. Nothing ever opens or increases a position.',
   'In groups, everyone sees alerts; group admins can act.',
   'PerpGuard never asks for your seed phrase or private key.',
 ].join('\n');

@@ -44,6 +44,7 @@
   .bar > i { display: block; height: 100%; border-radius: 99px; }
   .dist { font-size: 13px; color: var(--muted); margin-top: 6px; }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .actions button[data-a="addMargin"] { grid-column: 1 / -1; }
   button { font: inherit; border: 0; border-radius: 10px; padding: 11px 10px; cursor: pointer; background: var(--line); color: var(--text); font-weight: 600; }
   button.primary { background: var(--accent); color: var(--btn-text); }
   button.danger { background: var(--danger); color: #fff; }
@@ -130,8 +131,11 @@
 
 <script>
 (() => {
-  const LABELS = { close50: 'Close 50%', closeAll: 'Close all', stopBreakEven: 'Stop at break-even', stop2pct: 'Stop 2% away' };
+  const LABELS = { addMargin: 'Add margin', close50: 'Close 50%', closeAll: 'Close all', stopBreakEven: 'Stop at break-even', stop2pct: 'Stop 2% away' };
   const DETAIL = {
+    addMargin: (p) => p.isolated
+      ? `Moves free USDC into this isolated ${p.coin} position so liquidation is 8% away (max 500 USDC). The position size never changes.`
+      : `This is a cross-margin position: the whole account already backs it. Close or set a stop instead.`,
     close50: (p) => `Reduce-only market order for half the position (${+(p.size / 2).toPrecision(6)} ${p.coin}).`,
     closeAll: (p) => `Reduce-only market order for the whole ${p.size} ${p.coin}.`,
     stopBreakEven: (p) => `Stop-loss at your entry price ${fmt(p.entryPx)}. Only works while in profit.`,

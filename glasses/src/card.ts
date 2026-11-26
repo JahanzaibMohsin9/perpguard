@@ -1,7 +1,7 @@
 // Pure text rendering for the 576x288 glasses card.
 // Only glyphs known to render on G2: ● ○ ▲ ▼ ▶ ◀ ★ ━ ─ █ ╭╮╰╯ (emoji are silently dropped).
 
-import { ACTION_LABELS, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
+import { ACTION_LABELS, ADD_MARGIN_MAX_USD, ADD_MARGIN_TARGET_PCT, type ActionKind, type PositionView, type Snapshot } from '../../shared/protocol.ts';
 
 const BAR_CELLS = 10;
 const BAR_FULL_AT_PCT = 20; // 20%+ away from liquidation = full safety bar
@@ -73,20 +73,20 @@ function hints(snap: Snapshot): string {
 const RULE = '━━━━━━━━━━━━━━━━━━━━━━━━━━';
 
 /** Menu entries in display order. null = "Back". */
-export const MENU: Array<ActionKind | null> = ['close50', 'closeAll', 'stopBreakEven', 'stop2pct', null];
+export const MENU: Array<ActionKind | null> = ['addMargin', 'close50', 'closeAll', 'stopBreakEven', 'stop2pct', null];
 
 export function menuCard(p: PositionView, selected: number): string {
   return [
     `PERPGUARD  ▶ ACTIONS  ${p.coin} ${p.side}`,
     RULE,
     ...MENU.map((k, i) => `${i === selected ? '▶' : ' '} ${k ? ACTION_LABELS[k] : 'Back'}`),
-    '',
     '> scroll move   tap choose',
   ].join('\n');
 }
 
 export function confirmCard(p: PositionView, kind: ActionKind, heard?: string): string {
   const detail: Record<ActionKind, string> = {
+    addMargin: `Free USDC to margin, liq back to ${ADD_MARGIN_TARGET_PCT}%`,
     close50: `Sell half: ${+(p.size / 2).toPrecision(6)} of ${p.size} ${p.coin}`,
     closeAll: `Exit the whole ${p.size} ${p.coin}`,
     stopBreakEven: `Stop-loss at entry ${fmtPx(p.entryPx)}`,
@@ -100,7 +100,11 @@ export function confirmCard(p: PositionView, kind: ActionKind, heard?: string): 
     RULE,
     `${ACTION_LABELS[kind]}  ${p.coin} ${p.side} ${p.leverage}x`,
     detail[kind],
-    heard ? `Heard: "${heard.slice(0, 26)}"` : 'Testnet order, reduce-only.',
+    heard
+      ? `Heard: "${heard.slice(0, 26)}"`
+      : kind === 'addMargin'
+        ? `Max ${ADD_MARGIN_MAX_USD} USDC. Size never changes.`
+        : 'Testnet order, reduce-only.',
     '',
     '> tap = YES    scroll = cancel',
   ].join('\n');
@@ -138,8 +142,9 @@ export function listeningCard(seconds: number): string {
     'PERPGUARD  ● LISTENING',
     RULE,
     'Say a command, then release:',
-    '  "close half"   "close all"',
-    '  "break even"   "two percent stop"',
+    '  "add margin"   "close half"',
+    '  "close all"    "break even"',
+    '  "two percent stop"',
     '',
     `${'█'.repeat(Math.min(10, Math.ceil(seconds)))}${'─'.repeat(Math.max(0, 10 - Math.ceil(seconds)))}  ${seconds.toFixed(1)}s`,
   ].join('\n');
@@ -154,8 +159,8 @@ export function notUnderstoodCard(transcript: string): string {
     'PERPGUARD  ▲ NOT A COMMAND',
     RULE,
     transcript ? `Heard: "${transcript.slice(0, 26)}"` : 'Heard nothing.',
-    'Try: close half / close all /',
-    '     break even / two percent stop',
+    'Try: add margin / close half /',
+    '     close all / break even / 2% stop',
     '',
     '> tap back   hold to retry',
   ].join('\n');

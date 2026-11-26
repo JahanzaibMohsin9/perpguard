@@ -14,6 +14,7 @@ export interface PositionView {
   liqDistancePct: number | null; // % the mark must move against us to hit liqPx
   unrealizedPnl: number;
   minutesToLiq: number | null; // "at this pace" trend estimate; null = not heading toward liquidation
+  isolated?: boolean; // isolated margin: closing part of it barely moves liqPx, adding margin does
 }
 
 export interface Snapshot {
@@ -36,9 +37,15 @@ export interface StatusMessage {
 }
 
 /** Protective-only actions. PerpGuard never opens or increases a position. */
-export type ActionKind = 'close50' | 'closeAll' | 'stopBreakEven' | 'stop2pct';
+export type ActionKind = 'addMargin' | 'close50' | 'closeAll' | 'stopBreakEven' | 'stop2pct';
+
+/** "Add margin" brings an isolated position back to this distance from liquidation (the WARNING line). */
+export const ADD_MARGIN_TARGET_PCT = 8;
+/** Safety cap: the most USDC one "Add margin" may move into a position. */
+export const ADD_MARGIN_MAX_USD = 500;
 
 export const ACTION_LABELS: Record<ActionKind, string> = {
+  addMargin: 'Add margin',
   close50: 'Close 50%',
   closeAll: 'Close all',
   stopBreakEven: 'Stop at break-even',

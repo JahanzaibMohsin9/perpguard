@@ -15,6 +15,10 @@ test('known phrases map to protective actions', () => {
   assert.equal(action('breakeven stop'), 'stopBreakEven');
   assert.equal(action('2% stop'), 'stop2pct');
   assert.equal(action('two percent stop'), 'stop2pct');
+  assert.equal(action('Add margin.'), 'addMargin');
+  assert.equal(action('add some margin to ethereum'), 'addMargin');
+  assert.equal(action('top up margin'), 'addMargin');
+  assert.equal(action('margin call'), null); // "margin" alone is not a command
 });
 
 test('a coin name selects the position', () => {

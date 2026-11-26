@@ -62,6 +62,8 @@ function normalise(text: string): string {
 
 // Order matters: more specific phrases first.
 const RULES: Array<{ action: ActionKind; test: RegExp }> = [
+  // "add margin" (Whisper sometimes hears "had margin" / "at margin"), "top up margin", "more margin"
+  { action: 'addMargin', test: /\b(add|had|at|top ?up|more)\b( some)?( more)? margin\b/ },
   { action: 'stopBreakEven', test: /\bbreakeven\b/ },
   { action: 'stop2pct', test: /\b(stop.*\b2%|2% ?stop|2% away)\b/ },
   { action: 'close50', test: /\b(close|cut|reduce|sell|take)\b.*\b(half|50%?)\b|\b(half|50%) (off|close)\b/ },

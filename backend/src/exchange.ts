@@ -8,7 +8,7 @@
 import { encode } from '@msgpack/msgpack';
 import { concat, keccak256, parseSignature, type Hex } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import type { ActionKind } from '../../shared/protocol.ts';
+import { ADD_MARGIN_MAX_USD, ADD_MARGIN_TARGET_PCT, type ActionKind } from '../../shared/protocol.ts';
 import { API_URL, info, type Network } from './hyperliquid.ts';
 
 const SLIPPAGE = 0.05; // aggressive IOC limit = market order with a 5% price cap
@@ -102,16 +102,55 @@ interface LivePosition {
   coin: string;
   szi: number;
   entryPx: number;
+  liqPx: number | null;
+  isolated: boolean;
+  maxLeverage: number;
+}
+
+interface RawPosition {
+  coin: string;
+  szi: string;
+  entryPx: string;
+  liquidationPx: string | null;
+  leverage: { type: string };
+  maxLeverage: number;
 }
 
 async function livePosition(network: Network, user: string, coin: string): Promise<LivePosition | null> {
-  const state = await info<{ assetPositions: Array<{ position: { coin: string; szi: string; entryPx: string } }> }>(
-    network,
-    { type: 'clearinghouseState', user },
-  );
+  const state = await info<{ assetPositions: Array<{ position: RawPosition }> }>(network, { type: 'clearinghouseState', user });
   const p = state.assetPositions.find((a) => a.position.coin === coin)?.position;
   if (!p || Number(p.szi) === 0) return null;
-  return { coin, szi: Number(p.szi), entryPx: Number(p.entryPx) };
+  return {
+    coin,
+    szi: Number(p.szi),
+    entryPx: Number(p.entryPx),
+    liqPx: p.liquidationPx !== null ? Number(p.liquidationPx) : null,
+    isolated: p.leverage.type === 'isolated',
+    maxLeverage: p.maxLeverage || 20,
+  };
+}
+
+/** USDC that can move into an isolated margin: free perps balance plus free spot USDC (unified accounts). */
+async function freeUsdc(network: Network, user: string): Promise<number> {
+  const [perps, spot] = await Promise.all([
+    info<{ withdrawable: string }>(network, { type: 'clearinghouseState', user }),
+    info<{ balances: Array<{ coin: string; total: string; hold: string }> }>(network, { type: 'spotClearinghouseState', user }),
+  ]);
+  const usdc = spot.balances.find((b) => b.coin === 'USDC');
+  return Math.max(0, Number(perps.withdrawable)) + (usdc ? Math.max(0, Number(usdc.total) - Number(usdc.hold)) : 0);
+}
+
+/**
+ * USDC to add to an isolated position so its liquidation price sits `targetPct` % from the mark.
+ * Hyperliquid isolated liq: liq = mark - side * marginAvailable / size / (1 - mmr * side), with mmr = 1 / (2 * maxLeverage).
+ * Moving liq by d therefore needs d * size * (1 - mmr * side) of margin. Returns 0 when it is already that far away.
+ */
+export function marginToTarget(isLong: boolean, mark: number, liqPx: number, size: number, targetPct: number, maxLeverage: number): number {
+  const mmr = 1 / (2 * maxLeverage);
+  const side = isLong ? 1 : -1;
+  const targetLiq = mark * (1 - (side * targetPct) / 100);
+  const move = side * (liqPx - targetLiq); // how far liq must move away from the mark
+  return move <= 0 ? 0 : move * size * (1 - mmr * side);
 }
 
 export async function markPx(network: Network, coin: string): Promise<number> {
@@ -180,6 +219,8 @@ export class Trader {
     const absSz = Math.abs(pos.szi);
     const mark = await markPx(this.network, coin);
 
+    if (kind === 'addMargin') return this.addMargin(pos, a, szDecimals, mark);
+
     if (kind === 'close50' || kind === 'closeAll') {
       let sz = kind === 'closeAll' ? absSz : roundSz(absSz / 2, szDecimals);
       if (sz <= 0) sz = absSz; // position too small to halve
@@ -192,7 +233,9 @@ export class Trader {
       const res = await exchange(this.agent, this.network, action);
       const st = firstStatus(res);
       const what = kind === 'closeAll' ? 'Closed all' : 'Closed 50%';
-      return { ok: st.ok, message: st.ok ? `${what}: ${coin} ${st.text}` : `Rejected: ${st.text}`, detail: res };
+      // Isolated: Hyperliquid releases margin pro rata, so the liq price barely moves. Say so.
+      const note = kind === 'close50' && pos.isolated ? '; isolated: liq price unchanged, half the margin now at risk' : '';
+      return { ok: st.ok, message: st.ok ? `${what}: ${coin} ${st.text}${note}` : `Rejected: ${st.text}`, detail: res };
     }
 
     // Stop-loss (reduce-only, market trigger) for the full position.
@@ -230,6 +273,28 @@ export class Trader {
       message: st.ok ? `${label} set at ${toWire(trigger)}${replaced}` : `Rejected: ${st.text}`,
       detail: res,
     };
+  }
+
+  /**
+   * Add margin (isolated only): move free USDC into the position's margin so liquidation goes back to the
+   * WARNING line. It never changes the position size, and it is capped by free USDC and ADD_MARGIN_MAX_USD.
+   */
+  private async addMargin(pos: LivePosition, asset: number, szDecimals: number, mark: number): Promise<ActionResult> {
+    if (!pos.isolated) return { ok: false, message: 'Cross margin: the whole account already backs it. Close or stop instead.' };
+    if (!pos.liqPx) return { ok: false, message: 'No liquidation price: nothing to add.' };
+    const isLong = pos.szi > 0;
+    const need = marginToTarget(isLong, mark, pos.liqPx, Math.abs(pos.szi), ADD_MARGIN_TARGET_PCT, pos.maxLeverage);
+    if (need < 1) return { ok: false, message: `Already ${ADD_MARGIN_TARGET_PCT}%+ from liquidation: no margin needed.` };
+    const free = await freeUsdc(this.network, this.master);
+    const usd = Math.floor(Math.min(need, free, ADD_MARGIN_MAX_USD) * 100) / 100;
+    if (usd < 1) return { ok: false, message: 'No free USDC to add.' };
+    const res = await exchange(this.agent, this.network, { type: 'updateIsolatedMargin', asset, isBuy: isLong, ntli: Math.round(usd * 1e6) });
+    if (res.status !== 'ok') return { ok: false, message: `Rejected: ${String(res.response)}`, detail: res };
+    const after = await livePosition(this.network, this.master, pos.coin);
+    const liqBefore = toWire(roundPx(pos.liqPx, szDecimals));
+    const liqAfter = after?.liqPx ? ` to ${toWire(roundPx(after.liqPx, szDecimals))}` : '';
+    const capped = usd < need - 0.5 ? ` (capped: ${usd < free ? `max ${ADD_MARGIN_MAX_USD} USDC` : 'all free USDC'})` : '';
+    return { ok: true, message: `Added ${usd.toFixed(2)} USDC margin${capped}; liq ${liqBefore}${liqAfter}`, detail: res };
   }
 
   /**
