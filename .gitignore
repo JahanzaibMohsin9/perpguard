@@ -32,3 +32,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# --- Speech model for the web demo: copied in at build time, never committed ---
+web-demo/public/models/

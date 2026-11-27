@@ -154,14 +154,20 @@ export class TelegramBot {
     return json.result;
   }
 
-  private send(chatId: number, html: string, keyboard?: Keyboard) {
+  private send(chatId: number, html: string, keyboard?: Keyboard, silent = false) {
     return this.api('sendMessage', {
       chat_id: chatId,
       text: html,
       parse_mode: 'HTML',
       disable_web_page_preview: true,
+      ...(silent ? { disable_notification: true } : {}),
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
+  }
+
+  /** A link to the explorer under a successful action, so anyone can check the real order. */
+  private proof(ok: boolean) {
+    return ok && this.deps.explorerUrl ? `\n<a href="${esc(this.deps.explorerUrl)}">Check it on the Hyperliquid explorer</a>` : '';
   }
 
   private isLinked(chatId: number) {
@@ -169,10 +175,10 @@ export class TelegramBot {
   }
 
   /** Message every linked (and not paused, unless force) chat, except `exceptChatId`. */
-  async broadcast(html: string, keyboard?: Keyboard, force = false, exceptChatId?: number) {
+  async broadcast(html: string, keyboard?: Keyboard, force = false, exceptChatId?: number, silent = false) {
     for (const c of this.state.chats) {
       if ((c.paused && !force) || c.id === exceptChatId) continue;
-      await this.send(c.id, html, keyboard).catch((err) => this.deps.log.error({ err }, `telegram send to ${c.id} failed`));
+      await this.send(c.id, html, keyboard, silent).catch((err) => this.deps.log.error({ err }, `telegram send to ${c.id} failed`));
     }
   }
 
@@ -182,7 +188,27 @@ export class TelegramBot {
     this.save(); // persist the pairing code on first run
     this.deps.log.info(`Telegram bot @${me.username} ready. ${this.state.chats.length} linked chat(s).`);
     this.deps.log.info(`Link a chat (keep private): https://t.me/${me.username}?start=${this.state.pairCode}`);
+    void this.setupProfile().catch((err) => this.deps.log.warn(`Telegram profile setup failed (${(err as Error).message})`));
     void this.pollLoop();
+  }
+
+  /** The "/" command menu (private chats and groups) and the text people see before pressing Start. */
+  private async setupProfile() {
+    await this.api('setMyCommands', { commands: COMMANDS, scope: { type: 'all_private_chats' } });
+    await this.api('setMyCommands', {
+      commands: COMMANDS.filter((c) => !['pair', 'devices', 'unpair'].includes(c.command)), // pairing glasses is a private-chat thing
+      scope: { type: 'all_group_chats' },
+    });
+    await this.api('setMyShortDescription', { short_description: 'Liquidation shield for Hyperliquid on Even Realities G2: alerts, live risk card, one-tap protection. Testnet.' });
+    await this.api('setMyDescription', {
+      description: [
+        'PerpGuard watches your Hyperliquid positions and warns you before liquidation, on Even Realities G2 glasses and here in Telegram.',
+        '',
+        'Protective actions only: add margin, close half, close all, break-even stop, 2% stop. Every action asks for confirmation. Nothing ever opens or increases a position.',
+        '',
+        'Testnet only. Not financial advice. PerpGuard never asks for your seed phrase or private key.',
+      ].join('\n'),
+    });
   }
 
   stop() {
@@ -401,6 +427,7 @@ Turn off: <code>/guardian off</code>`
         message_id: q.message.message_id,
         text: html,
         parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
         ...(keyboard ? { reply_markup: keyboard } : {}),
       }).catch(() => {});
 
@@ -440,10 +467,10 @@ Turn off: <code>/guardian off</code>`
       const where = isGroup ? ` in ${chat.title ?? 'a group'}` : '';
       const source = `Telegram${via === 'v' ? ' voice' : ''} (${name}${where})`;
       const r = await this.deps.runAction(action, coin, source);
-      await edit(`${r.ok ? '✅' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)} (Telegram)\n${esc(r.message)}`);
+      await edit(`${r.ok ? '✅' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)} (Telegram)\n${esc(r.message)}${this.proof(r.ok)}`);
       // Everyone else who watches this account learns who stepped in.
       return this.broadcast(
-        `${r.ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)}${esc(where)} (Telegram)\n${esc(r.message)}`,
+        `${r.ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> by ${esc(name)}${esc(where)} (Telegram)\n${esc(r.message)}${this.proof(r.ok)}`,
         undefined,
         true,
         chatId,
@@ -500,7 +527,7 @@ If nobody acts within <b>${graceSec} s</b>, PerpGuard will close <b>${closePct}%
   guardianActed(coin: string, ok: boolean, message: string) {
     return this.broadcast(
       `${ok ? '🛡' : '❌'} <b>Guardian ${ok ? 'protected' : 'could not protect'} ${esc(coin)}</b> (no response in time)
-${esc(message)}`,
+${esc(message)}${this.proof(ok)}`,
       undefined,
       true,
     );
@@ -604,7 +631,7 @@ ${esc(message)}`,
       } else if (RISK_ORDER[now] > RISK_ORDER[before]) {
         await this.alert(p, now, snap.network);
       } else if (now === 'OK' && before !== 'OK') {
-        await this.broadcast(`🟢 <b>${esc(p.coin)} is back to safe</b>: ${fmt(p.liqDistancePct, 1)}% from liquidation.`);
+        await this.broadcast(`🟢 <b>${esc(p.coin)} is back to safe</b>: ${fmt(p.liqDistancePct, 1)}% from liquidation.`, undefined, false, undefined, true); // good news: no buzz
       }
     }
     for (const coin of this.lastRisk.keys()) if (!seen.has(coin)) this.lastRisk.delete(coin);
@@ -634,7 +661,7 @@ ${esc(message)}`,
   receipt(source: string, action: ActionKind, coin: string, ok: boolean, message: string, heard?: string) {
     const said = heard ? `\nHeard: “${esc(heard)}”` : '';
     return this.broadcast(
-      `${ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> via ${source}${said}\n${esc(message)}`,
+      `${ok ? '🧾' : '❌'} <b>${ACTION_LABELS[action]} ${esc(coin)}</b> via ${source}${said}\n${esc(message)}${this.proof(ok)}`,
       undefined,
       true, // receipts go out even when alerts are paused
     );
@@ -741,7 +768,7 @@ export function historyHtml(entries: HistoryEntry[], explorerUrl?: string): stri
     '',
     ...rows,
     '',
-    'Every order is reduce-only and signed by the agent wallet, which cannot withdraw.',
+    'Every close and stop is reduce-only, added margin only moves your own free USDC, and all of it is signed by the agent wallet, which cannot withdraw.',
     ...(explorerUrl ? [`<a href="${esc(explorerUrl)}">Check them on the Hyperliquid explorer</a>`] : []),
   ].join('\n');
 }
@@ -751,6 +778,21 @@ function fmtMinutes(m: number): string {
   if (m < 90) return `${Math.round(m)} min`;
   return `${(m / 60).toFixed(1)} h`;
 }
+
+const COMMANDS = [
+  { command: 'status', description: 'Positions, distance to liquidation, action buttons' },
+  { command: 'live', description: 'Pin a live risk card that updates itself' },
+  { command: 'app', description: 'Open the Mini App dashboard' },
+  { command: 'history', description: 'Every protective action, with order ids' },
+  { command: 'guardian', description: 'Auto-protect if nobody answers a DANGER alert' },
+  { command: 'alerts', description: 'View or change alert levels' },
+  { command: 'pause', description: 'Mute alerts in this chat' },
+  { command: 'resume', description: 'Unmute alerts in this chat' },
+  { command: 'pair', description: 'Pair glasses: /pair 123456' },
+  { command: 'devices', description: 'Paired glasses' },
+  { command: 'unpair', description: 'Remove paired glasses' },
+  { command: 'help', description: 'What PerpGuard does' },
+];
 
 const HELP = [
   '<b>PerpGuard</b> watches your Hyperliquid positions (testnet) and shows them on Even Realities G2 glasses.',

@@ -5,7 +5,6 @@
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import { pipeline, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
-import type { ActionKind } from '../../shared/protocol.ts';
 
 const MODEL = process.env.WHISPER_MODEL ?? 'onnx-community/whisper-base.en';
 export const SAMPLE_RATE = 16_000; // Even Hub audio: 16 kHz, signed 16-bit little-endian, mono
@@ -39,55 +38,9 @@ export async function transcribe(pcm: Uint8Array): Promise<string> {
   return text.trim();
 }
 
-// ---------- fixed phrase grammar ----------
+// ---------- fixed phrase grammar (in grammar.ts, shared with the browser demo) ----------
 
-export interface VoiceCommand {
-  action: ActionKind;
-  coin: string | null; // null = the position currently on screen
-}
-
-const NUMBER_WORDS: Record<string, string> = { two: '2', fifty: '50', half: 'half', hundred: '100' };
-
-function normalise(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9% ]+/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => NUMBER_WORDS[w] ?? w)
-    .join(' ')
-    .replace(/(\d+) ?(percent|per cent|%)/g, '$1%')
-    .replace(/break ?even|breakeven/g, 'breakeven');
-}
-
-// Order matters: more specific phrases first.
-const RULES: Array<{ action: ActionKind; test: RegExp }> = [
-  // "add margin" (Whisper sometimes hears "had margin" / "at margin"), "top up margin", "more margin"
-  { action: 'addMargin', test: /\b(add|had|at|top ?up|more)\b( some)?( more)? margin\b/ },
-  { action: 'stopBreakEven', test: /\bbreakeven\b/ },
-  { action: 'stop2pct', test: /\b(stop.*\b2%|2% ?stop|2% away)\b/ },
-  { action: 'close50', test: /\b(close|cut|reduce|sell|take)\b.*\b(half|50%?)\b|\b(half|50%) (off|close)\b/ },
-  { action: 'closeAll', test: /\b(close|exit|flatten|kill)\b.*\b(all|everything|whole|entire|full|it|position)\b|\bflatten\b|\bclose\b$/ },
-];
-
-export function parseCommand(text: string, coins: string[]): VoiceCommand | null {
-  const t = normalise(text);
-  if (!t) return null;
-  const rule = RULES.find((r) => r.test.test(t));
-  if (!rule) return null;
-  const coin = coins.find((c) => new RegExp(`\\b${c.toLowerCase()}\\b`).test(t) || aliases(c).some((a) => t.includes(a))) ?? null;
-  return { action: rule.action, coin };
-}
-
-function aliases(coin: string): string[] {
-  const map: Record<string, string[]> = {
-    BTC: ['bitcoin'],
-    ETH: ['ethereum', 'ether', 'eth'],
-    SOL: ['solana'],
-    HYPE: ['hype', 'hyper liquid'],
-  };
-  return map[coin] ?? [];
-}
+export { parseCommand, type VoiceCommand } from './grammar.ts';
 
 // ---------- Telegram voice notes (OGG/Opus) -> 16 kHz mono s16le PCM ----------
 

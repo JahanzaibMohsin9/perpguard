@@ -8,12 +8,13 @@ Built for *Heads Up: Even Realities Hackathon* (TVM Ventures & Daos Hub), Nov 23
 Tracks: **02 Crypto & DeFi (Hyperliquid)** + **01 Messaging (Telegram)**.
 
 **▶ Try it in your browser (no install):** https://jahanzaibmohsin9.github.io/perpguard/
-It's the real glasses card on live Hyperliquid data for any address, with a "random live trader" button.
+It's the real glasses card on live Hyperliquid data for any address, plus a sample DANGER position. **Hold and speak** ("add margin", "close half"): the same Whisper model and phrase rules as the real app run in your browser.
 
 ### For judges: 60 seconds
 1. **Watch the demo (2:44):** https://youtu.be/W9RgstmENQ4
-2. **Try the glasses card** on live Hyperliquid data for any address, no install: https://jahanzaibmohsin9.github.io/perpguard/
-3. **Check that the orders are real.** Every action in the video is an order on the Hyperliquid testnet. Open the [demo account on the Hyperliquid testnet explorer](https://app.hyperliquid-testnet.xyz/explorer/address/0xc1bBF5a49b4F8B7CF0CE9efa1988f25892a654c7) and find these order ids (Nov 26, 2026, UTC):
+2. **Try it yourself, no install:** https://jahanzaibmohsin9.github.io/perpguard/. Tap through the actions on a sample DANGER position, or **speak to it** with your own voice: the same Whisper model and phrase grammar as the real app, running in your browser (no audio leaves the page).
+3. **Voice you can trust, measured:** 756 spoken clips (9 voices, 6 English accents, clean and with background noise) through the real voice path. **0 wrong actions**, **324 of 324** non-commands ignored ("don't close half", "buy one Bitcoin", "withdraw everything"), and 94.9% of commands understood on clean audio. [Full results, every miss listed](backend/bench/results.md).
+4. **Check that the orders are real.** Every action in the video is an order on the Hyperliquid testnet. Open the [demo account on the Hyperliquid testnet explorer](https://app.hyperliquid-testnet.xyz/explorer/address/0xc1bBF5a49b4F8B7CF0CE9efa1988f25892a654c7) and find these order ids (Nov 26, 2026, UTC):
 
    | Time | Action | Who / from where | Hyperliquid order id |
    |---|---|---|---|
@@ -24,7 +25,7 @@ It's the real glasses card on live Hyperliquid data for any address, with a "ran
    | 14:59 | Guardian: close 25% + safety stop | Guardian (nobody answered the DANGER alert) | 66029344164, 66029345793 |
 
    Later the safety stop closed the rest of the position. It was never liquidated.
-4. **Packaged app:** `perpguard-0.2.0.ehpk` on the [Releases page](https://github.com/JahanzaibMohsin9/perpguard/releases).
+5. **Packaged app:** `perpguard-0.2.0.ehpk` on the [Releases page](https://github.com/JahanzaibMohsin9/perpguard/releases).
 
 > ⚠️ **Testnet only.** PerpGuard trades on the Hyperliquid **testnet** and never holds user funds. It gives no financial advice. Every action is **protective**: it can reduce or protect a position, but it never opens or increases one.
 
@@ -41,7 +42,7 @@ Leveraged traders get liquidated while they are away from their screens: walking
 | Surface | Features |
 |---|---|
 | **G2 glasses** | Live card per position: PnL, mark and liquidation price, % distance to liquidation, **time to liquidation at the current pace**, a safety bar, and an OK / ▲ WARNING / ▲ DANGER label. Riskiest position first. **Tap**: actions menu → confirm → result. **Hold to talk**: say *"add margin"*, *"close half"*, *"close all"*, *"break even"* or *"two percent stop"*. |
-| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe), with action buttons. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance and **how many seconds after the alert** the position was protected. **Voice notes** in private chats and in **group chats**: the bot transcribes them and replies with confirm buttons. |
+| **Telegram bot** | Alerts when a position moves OK → WARNING → DANGER (and back to safe, silently), with action buttons. A **`/` command menu** (private chats and groups) and a bot description shown before Start. `/status`, `/alerts 8 3`, `/guardian on`, `/pause`, `/resume`. **Receipts** for every action, showing the new liquidation distance, **how many seconds after the alert** the position was protected, and a link to the order on the Hyperliquid explorer. **Voice notes** in private chats and in **group chats**: the bot transcribes them and replies with confirm buttons. |
 | **Live risk card** (`/live`) | One **pinned message that updates itself** as prices move: a safety bar, distance to liquidation, time to liquidation and the Guardian countdown, with protective buttons underneath. |
 | **Buddy protection in groups** | Link a group (a trading desk, or friends watching each other's back). Everyone sees the alerts; **group admins** can act on them. When someone steps in, every other linked chat gets "Close 50% ETH **by Ali in Trading Desk**". |
 | **Audit trail** (`/history`) | Every protective action, with **who did it, from where** (glasses tap or voice, Telegram, Mini App, Guardian) and the **Hyperliquid order ids**, plus a link to the account on the Hyperliquid explorer. A key that can trade should leave a visible trail. |
@@ -70,7 +71,7 @@ The five protective actions:
   - Telegram buttons: the confirmation expires after 60 s.
   - Mini App: a confirm sheet.
   - Voice: voice only *selects* an action, and you still confirm it with a tap.
-- **Fixed phrases, no LLM.** Speech is matched against a small grammar, so random speech can't become an order. Whisper runs **locally**, and the audio never leaves the machine.
+- **Fixed phrases, no LLM.** Speech is matched against a small grammar, so random speech can't become an order. Negated speech ("don't close half", "no", "cancel", "never mind") is ignored. Whisper runs **locally**, and the audio never leaves the machine. **Measured:** 0 wrong actions in [756 spoken clips across 6 English accents](backend/bench/results.md).
 - **Who may trade.**
   - The glasses may trade only through a connection from the same machine.
   - Remote clients (the Mini App, via the tunnel) start **read-only**. They can trade only after sending Telegram `initData` that passes **HMAC verification** and belongs to a linked chat or linked-group member.
@@ -168,25 +169,42 @@ A ready-made `perpguard-0.2.0.ehpk` is on the [Releases page](https://github.com
 
 ### Dev scripts (`backend/scripts/`, testnet only)
 - `voice-test.ts`: transcribe WAV files and show which command each maps to.
+- `voice-bench.ts`: the voice benchmark (see [Tests](#tests)).
 - `demo-position.ts`: set up an isolated-margin demo position, so the card shows real WARNING or DANGER. This is a dev tool; the product itself never opens positions.
 - `fund-testnet.ts`, `bridge-gas.ts`: an experimental free testnet-funding route (Circle CCTP). It is **unreliable**: Hyperliquid's testnet forwarder drops most deposits. Use the official faucet instead.
 
 ## Tests
 
 ```bash
-npm test    # 40 unit tests, also run by GitHub Actions on every push
+npm test    # 42 unit tests, also run by GitHub Actions on every push
 ```
 
 They cover:
 - **Order signing:** the action hash matches the **official Hyperliquid Python SDK golden vector**, and signatures recover to the agent address. Number formatting is checked too.
 - **Risk:** liquidation distance for longs and shorts, alert levels, and hysteresis.
 - **Add margin:** the margin formula reproduces a real testnet move (+25 USDC took a 0.7032 ETH position's liquidation from 1672.40 to 1636.12), for longs and shorts.
-- **Voice grammar:** known phrases map to actions. Unknown speech, "buy" commands and Whisper's silence hallucinations map to nothing.
+- **Voice grammar:** known phrases map to actions. Unknown speech, negated speech ("don't close half"), "buy" commands and Whisper's silence hallucinations map to nothing.
 - **Telegram Mini App login:** valid launch data passes. Tampered, foreign-bot and stale data is rejected.
 - **Telegram live card and audit trail:** the safety bar, the Guardian countdown, order ids pulled from exchange responses, and HTML escaping.
 - **Glasses cards:** only glyphs the G2 display can render, and every card fits the lens.
 - **Time to liquidation, Guardian and pairing:** pace estimates, the Guardian timer and cooldown, and one-time pairing codes with hashed device tokens.
 - **Local vs remote:** only direct connections from the server's own machine can trade without pairing; tunnel (ngrok, Cloudflare) and LAN traffic cannot.
+
+### Voice benchmark
+
+Unit tests check the grammar on text. The benchmark checks the whole voice path on **audio**: 42 phrases (24 protective commands, 18 that must be ignored, such as "don't close half", "buy one Bitcoin", "withdraw everything" and "close five hundred percent"), spoken by 9 synthetic voices in 6 English accents (Indian, British, Australian, Nigerian, Kenyan, American), each clean and with background noise. Every clip goes through what the glasses microphone feeds: 16 kHz PCM, then local Whisper, then the grammar.
+
+| 756 clips | Commands understood | Coin not heard | Missed (say it again) | Non-commands ignored | Wrong actions |
+|---|---|---|---|---|---|
+| Clean | 205/216 (94.9%) | 0 | 11 | 162/162 | **0** |
+| Background noise (10 dB SNR) | 168/216 (77.8%) | 8 | 40 | 162/162 | **0** |
+
+"Coin not heard" means the right action on the position on screen, because Whisper misheard the coin's name; the confirm card names the coin. Accents matter: American, British and Australian voices score 92–100%, while Indian, Nigerian and Kenyan voices score 67–79% with the small `whisper-base.en` model. Every miss is listed in [backend/bench/results.md](backend/bench/results.md). The first run also found two grammar gaps, which are now fixed and tested: Whisper writes "reduced by half" and "brick even".
+
+```bash
+pip install edge-tts
+cd backend && npx tsx scripts/voice-bench.ts   # speech is cached under internal/, so re-runs only re-score
+```
 
 ## Notes and limitations
 

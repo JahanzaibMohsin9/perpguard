@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PerpGuard · try it</title>
-<meta name="description" content="Try PerpGuard for Even Realities G2 in your browser: live Hyperliquid liquidation risk for any address." />
+<meta name="description" content="Try PerpGuard for Even Realities G2 in your browser: live Hyperliquid liquidation risk for any address, and real voice commands." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -63,7 +63,8 @@
     <span class="chip">read-only browser demo</span>
   </header>
   <p class="sub">This is the exact card PerpGuard shows on <b>Even Realities G2</b> glasses (576×288), live from Hyperliquid for any address.
-    Use the touchpad buttons (or keys) to walk the read → act flow. Trading is disabled here; the real app sends reduce-only testnet orders.</p>
+    Use the touchpad buttons (or keys) to walk the read → act flow. <b>Hold and speak</b> (“add margin”, “close half”): the same Whisper model and phrase rules as the real app run right here in your browser, and no audio leaves the page.
+    Nothing is traded here; the real app sends real testnet orders.</p>
 
   <div class="controls">
     <input id="addr" placeholder="0x… any Hyperliquid address" spellcheck="false" autocomplete="off" />
@@ -72,6 +73,7 @@
       <option value="mainnet">Mainnet (read-only)</option>
     </select>
     <button class="primary" id="watch">Watch</button>
+    <button id="sample" title="A made-up position close to liquidation, to try every action">Sample DANGER position</button>
     <button id="random" title="Pick someone who just traded on Hyperliquid">🎲 Random live trader</button>
   </div>
 
@@ -88,14 +90,14 @@ Loading...</pre>
     <button data-in="click">Tap<span class="hint">Enter</span></button>
     <button data-in="up">Scroll ↑<span class="hint">↑</span></button>
     <button data-in="down">Scroll ↓<span class="hint">↓</span></button>
-    <button data-in="hold">Hold (voice)<span class="hint">Space</span></button>
+    <button data-in="hold" style="touch-action:none">Hold + speak<span class="hint">hold Space · mic</span></button>
     <button data-in="double">Double tap<span class="hint">Esc</span></button>
   </div>
   <div class="status" id="status"></div>
 
   <section class="grid">
     <div class="card"><h3>Read at a glance</h3><p>Distance to liquidation, a safety bar, and <b>time to liquidation at the current pace</b> (appears after ~45 s of live data while price trends toward liquidation).</p></div>
-    <div class="card"><h3>Act in seconds</h3><p>Tap or say “close half”, confirm with one tap. Real app: a reduce-only order through an agent wallet that can never withdraw.</p></div>
+    <div class="card"><h3>Act in seconds</h3><p>Tap or say “add margin” or “close half”, confirm with one tap. Real app: a real testnet order through an agent wallet that can never withdraw, and nothing can ever open or increase a position.</p></div>
     <div class="card"><h3>Telegram + Guardian</h3><p>Alerts, receipts, group voice notes and a Mini App. Guardian closes 25% and sets a stop before liquidation if nobody answers a DANGER alert.</p></div>
   </section>
 

@@ -150,8 +150,8 @@ export function listeningCard(seconds: number): string {
   ].join('\n');
 }
 
-export function thinkingCard(): string {
-  return ['PERPGUARD  ○ HEARING', RULE, 'Transcribing on your PC...'].join('\n');
+export function thinkingCard(where = 'on your PC'): string {
+  return ['PERPGUARD  ○ HEARING', RULE, `Transcribing ${where}...`].join('\n');
 }
 
 export function notUnderstoodCard(transcript: string): string {

@@ -27,6 +27,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Serve the speech model from the demo's own origin, so voice works where Hugging Face is slow or blocked.
+      - name: Bundle the Whisper model (whisper-base.en, q8)
+        run: |
+          base=https://huggingface.co/onnx-community/whisper-base.en/resolve/main
+          dir=web-demo/public/models/onnx-community/whisper-base.en
+          mkdir -p $dir/onnx
+          for f in config.json generation_config.json preprocessor_config.json tokenizer.json tokenizer_config.json \
+                   onnx/encoder_model_quantized.onnx onnx/decoder_model_merged_quantized.onnx; do
+            curl -fsSL --retry 3 -o "$dir/$f" "$base/$f"
+          done
       - run: npm run build -w web-demo
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
